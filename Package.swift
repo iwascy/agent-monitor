@@ -34,6 +34,11 @@ let package = Package(
             path: "Tests/AgentMonitorCoreTests",
             resources: [
                 .copy("Fixtures")
+            ],
+            swiftSettings: [
+                .unsafeFlags([
+                    "-plugin-path", "/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing"
+                ])
             ]
         )
     ]
