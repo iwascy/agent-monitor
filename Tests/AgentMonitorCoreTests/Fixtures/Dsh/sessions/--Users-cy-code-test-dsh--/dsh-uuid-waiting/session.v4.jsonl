@@ -1,0 +1,4 @@
+{"type":"session","id":"dsh-uuid-waiting","createdAt":1700000000000,"cwd":"/Users/cy/code/test-dsh"}
+{"type":"session/title","data":{"title":"DSH 等待用户交互测试"}}
+{"type":"turn/start","seq":1,"time":1700000001000}
+{"type":"tool/call","data":{"name":"ask_user_question","callId":"c-101","question":"是否确认执行部署？"}}

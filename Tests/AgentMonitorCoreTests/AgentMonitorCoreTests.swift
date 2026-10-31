@@ -167,6 +167,77 @@ struct AgentMonitorCoreTests {
         #expect(completed.detail?.contains("HDMI EDID") == true)
     }
 
+    // MARK: - DSH Tests
+
+    @Test("DSH: Scanning waiting, running, and completed states")
+    func testDshStates() throws {
+        let fixtures = fixtureURL().appendingPathComponent("Dsh")
+        let sessionsDir = fixtures.appendingPathComponent("sessions")
+
+        let adapter = DshAdapter(
+            sessionsDirectory: sessionsDir,
+            zstdExecutablePath: "/opt/homebrew/bin/zstd",
+            isLockHeld: { path in
+                path.contains("dsh-uuid-waiting") || path.contains("dsh-uuid-running")
+            },
+            maxAgeSeconds: 100 * 365 * 86400
+        )
+
+        let sessions = try adapter.scan()
+        #expect(sessions.count == 3)
+
+        let waiting = try #require(sessions.first(where: { $0.id == "dsh:dsh-uuid-waiting" }))
+        #expect(waiting.state == .waitingForUser)
+        #expect(waiting.waitingLabel == "在问你")
+        #expect(waiting.detail == "是否确认执行部署？")
+        #expect(waiting.detailIsCommand == false)
+        #expect(waiting.title == "DSH 等待用户交互测试")
+
+        let running = try #require(sessions.first(where: { $0.id == "dsh:dsh-uuid-running" }))
+        #expect(running.state == .running)
+        #expect(running.detail == "正在运行 bash · pnpm build")
+        #expect(running.title == "DSH 正在运行测试")
+
+        let completed = try #require(sessions.first(where: { $0.id == "dsh:dsh-uuid-completed" }))
+        #expect(completed.state == .completed)
+        #expect(completed.detail == "构建顺利完成，产物已打包。")
+        #expect(completed.title == "DSH 已完成测试")
+    }
+
+    // MARK: - Antigravity Tests
+
+    @Test("Antigravity: Scanning running, waiting, and completed states")
+    func testAntigravityStates() throws {
+        let fixtures = fixtureURL().appendingPathComponent("Antigravity")
+
+        let adapter = AntigravityAdapter(
+            baseDirectory: fixtures,
+            isLockHeld: { path in
+                path.contains("ag-uuid-running") || path.contains("ag-uuid-waiting")
+            },
+            maxAgeSeconds: 100 * 365 * 86400
+        )
+
+        let sessions = try adapter.scan()
+        #expect(sessions.count == 3)
+
+        let waiting = try #require(sessions.first(where: { $0.id == "antigravity:ag-uuid-waiting" }))
+        #expect(waiting.state == .waitingForUser)
+        #expect(waiting.waitingLabel == "在问你")
+        #expect(waiting.detail == "请选择需要重构的模块")
+        #expect(waiting.title == "Antigravity 等待用户回复")
+
+        let running = try #require(sessions.first(where: { $0.id == "antigravity:ag-uuid-running" }))
+        #expect(running.state == .running)
+        #expect(running.detail == "正在思考…")
+        #expect(running.title == "Antigravity 运行中会话")
+
+        let completed = try #require(sessions.first(where: { $0.id == "antigravity:ag-uuid-completed" }))
+        #expect(completed.state == .completed)
+        #expect(completed.detail == "已生成 5 个组件并更新文档")
+        #expect(completed.title == "Antigravity 已完成任务")
+    }
+
     // MARK: - SessionStore Tests
 
     private final class MockAdapter: AgentAdapter, @unchecked Sendable {

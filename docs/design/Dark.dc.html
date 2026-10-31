@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>菜单栏面板 · 深色</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+a{color:#6cb4ff}a:hover{color:#9ccbff}
+button{font:inherit;color:inherit;border:0;background:none;margin:0;padding:0;text-align:left;cursor:default}
+.row:hover{background:rgba(255,255,255,0.07)}
+.chip:hover{filter:brightness(1.1)}
+.foot:hover{background:rgba(255,255,255,0.08)}
+@keyframes amPulseD{0%{box-shadow:0 0 0 0 rgba(10,132,255,0.6)}70%{box-shadow:0 0 0 5px rgba(10,132,255,0)}100%{box-shadow:0 0 0 0 rgba(10,132,255,0)}}
+.pulse{animation:amPulseD 1.8s ease-out infinite}
+</style>
+</helmet>
+<div style="width: 1200px; height: 800px; position: relative; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Helvetica Neue', sans-serif; color: #f5f5f7; background: linear-gradient(155deg, #1b2433 0%, #2a2a38 48%, #3b2c30 100%)">
+
+  <div style="position: absolute; left: 0; top: 0; right: 0; height: 28px; box-sizing: border-box; padding: 0 14px; display: flex; align-items: center; justify-content: space-between; background: rgba(28,28,32,0.55); backdrop-filter: blur(30px) saturate(180%); font-size: 13px">
+    <div style="display: flex; align-items: center; gap: 20px">
+      <span style="font-weight: 700">访达</span>
+      <span>文件</span>
+      <span>编辑</span>
+      <span>显示</span>
+      <span>前往</span>
+      <span>窗口</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 12px">
+      <button aria-label="Agent Monitor：2 个会话等你回复" style="height: 22px; padding: 0 6px 0 7px; border-radius: 5px; background: rgba(255,255,255,0.18); display: flex; align-items: center; gap: 5px">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="1.5" y="3.2" width="11" height="10" rx="2.6" stroke="currentColor" stroke-width="1.4"></rect><path d="M4.4 7.1h5M4.4 9.9h3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"></path><circle cx="12.9" cy="3.6" r="2.7" fill="#ff9f0a"></circle></svg>
+        <span style="min-width: 16px; height: 15px; padding: 0 4px; box-sizing: border-box; border-radius: 8px; background: #c2410c; color: #ffffff; font-size: 10.5px; font-weight: 700; display: flex; align-items: center; justify-content: center; font-variant-numeric: tabular-nums">2</span>
+      </button>
+      <svg width="17" height="13" viewBox="0 0 17 13" aria-hidden="true"><path d="M8.5 11.8l2.1-2.2a3 3 0 0 0-4.2 0z" fill="currentColor"></path><path d="M3.7 7a6.8 6.8 0 0 1 9.6 0" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"></path><path d="M1.2 4.3a10.4 10.4 0 0 1 14.6 0" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"></path></svg>
+      <svg width="25" height="12" viewBox="0 0 25 12" aria-hidden="true"><rect x="0.5" y="0.5" width="21" height="11" rx="3" fill="none" stroke="currentColor" stroke-opacity="0.45"></rect><rect x="2" y="2" width="14" height="8" rx="1.6" fill="currentColor"></rect><path d="M23.2 4.2v3.6" stroke="currentColor" stroke-opacity="0.45" stroke-width="1.4" stroke-linecap="round"></path></svg>
+      <span style="font-variant-numeric: tabular-nums">11月1日 周日 14:32</span>
+    </div>
+  </div>
+
+  <div style="position: absolute; top: 34px; right: 168px; width: 384px; box-sizing: border-box; padding: 10px; border-radius: 14px; background: rgba(38,38,42,0.78); backdrop-filter: blur(40px) saturate(190%); box-shadow: inset 0 0 0 0.5px rgba(255,255,255,0.14), 0 0 0 0.5px rgba(0,0,0,0.6), 0 20px 50px rgba(0,0,0,0.5); display: flex; flex-direction: column; gap: 6px">
+
+    <div style="display: flex; align-items: baseline; gap: 8px; padding: 4px 6px 2px">
+      <span style="flex: 1; font-size: 14px; font-weight: 700; letter-spacing: -0.01em">Agent 会话</span>
+      <span style="font-size: 11px; color: #a1a1a6">7 个活跃 · 4 个 agent</span>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; padding-bottom: 2px">
+      <button class="chip" style="padding: 7px 9px; border-radius: 9px; background: rgba(255,159,10,0.18); display: flex; flex-direction: column; gap: 1px">
+        <span style="font-size: 18px; font-weight: 700; color: #ffb24d; font-variant-numeric: tabular-nums; line-height: 1.15">2</span>
+        <span style="font-size: 11px; font-weight: 500; color: #ffc27a">等你</span>
+      </button>
+      <button class="chip" style="padding: 7px 9px; border-radius: 9px; background: rgba(48,209,88,0.16); display: flex; flex-direction: column; gap: 1px">
+        <span style="font-size: 18px; font-weight: 700; color: #5fdc7e; font-variant-numeric: tabular-nums; line-height: 1.15">1</span>
+        <span style="font-size: 11px; font-weight: 500; color: #8de6a2">已完成</span>
+      </button>
+      <button class="chip" style="padding: 7px 9px; border-radius: 9px; background: rgba(10,132,255,0.2); display: flex; flex-direction: column; gap: 1px">
+        <span style="font-size: 18px; font-weight: 700; color: #6cb4ff; font-variant-numeric: tabular-nums; line-height: 1.15">2</span>
+        <span style="font-size: 11px; font-weight: 500; color: #9ccbff">运行中</span>
+      </button>
+      <button class="chip" style="padding: 7px 9px; border-radius: 9px; background: rgba(255,255,255,0.07); display: flex; flex-direction: column; gap: 1px">
+        <span style="font-size: 18px; font-weight: 700; color: #d1d1d6; font-variant-numeric: tabular-nums; line-height: 1.15">2</span>
+        <span style="font-size: 11px; font-weight: 500; color: #c7c7cc">空闲</span>
+      </button>
+    </div>
+
+    <div style="display: flex; align-items: center; gap: 6px; padding: 6px 8px 0; font-size: 11px; font-weight: 600; color: #a1a1a6">
+      <span style="width: 6px; height: 6px; border-radius: 3px; background: #ff9f0a"></span>等你回复
+    </div>
+    <sc-for list="{{waiting}}" as="item" hint-placeholder-count="2">
+      <button class="row" style="width: 100%; box-sizing: border-box; display: flex; align-items: flex-start; gap: 10px; padding: 8px; border-radius: 9px">
+        <img src="{{item.icon}}" alt="{{item.agent}}" style="width: 34px; height: 34px; flex: none; margin: -2px; object-fit: contain">
+        <span style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px">
+          <span style="display: flex; align-items: baseline; gap: 8px">
+            <span style="flex: 1; min-width: 0; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{item.title}}</span>
+            <span style="flex: none; font-size: 11px; color: #ffb24d; font-weight: 500; font-variant-numeric: tabular-nums">{{item.time}}</span>
+          </span>
+          <span style="font-size: 11px; color: #a1a1a6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{item.agent}} · {{item.cwd}}</span>
+          <span style="margin-top: 4px; display: flex; align-items: center; gap: 7px; padding: 5px 8px; border-radius: 7px; background: rgba(255,159,10,0.14); font-size: 11.5px; min-width: 0">
+            <span style="flex: none; font-weight: 600; color: #ffb24d">{{item.label}}</span>
+            <span style="min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #e5e5ea; font-family: {{item.font}}">{{item.text}}</span>
+          </span>
+        </span>
+      </button>
+    </sc-for>
+
+    <div style="display: flex; align-items: center; gap: 6px; padding: 6px 8px 0; font-size: 11px; font-weight: 600; color: #a1a1a6">
+      <span style="width: 6px; height: 6px; border-radius: 3px; background: #30d158"></span>已完成
+    </div>
+    <sc-for list="{{done}}" as="item" hint-placeholder-count="1">
+      <button class="row" style="width: 100%; box-sizing: border-box; display: flex; align-items: flex-start; gap: 10px; padding: 8px; border-radius: 9px">
+        <img src="{{item.icon}}" alt="{{item.agent}}" style="width: 34px; height: 34px; flex: none; margin: -2px; object-fit: contain">
+        <span style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px">
+          <span style="display: flex; align-items: baseline; gap: 8px">
+            <span style="flex: 1; min-width: 0; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{item.title}}</span>
+            <span style="flex: none; font-size: 11px; color: #a1a1a6; font-variant-numeric: tabular-nums">{{item.time}}</span>
+          </span>
+          <span style="font-size: 11px; color: #a1a1a6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{item.agent}} · {{item.cwd}}</span>
+          <span style="margin-top: 2px; display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: #e5e5ea; min-width: 0">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true" style="flex: none"><circle cx="6" cy="6" r="5.4" fill="#30d158"></circle><path d="M3.6 6.1l1.6 1.6 3.2-3.3" stroke="#0b2e15" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+            <span style="min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{item.text}}</span>
+          </span>
+        </span>
+      </button>
+    </sc-for>
+
+    <div style="display: flex; align-items: center; gap: 6px; padding: 6px 8px 0; font-size: 11px; font-weight: 600; color: #a1a1a6">
+      <span style="width: 6px; height: 6px; border-radius: 3px; background: #0a84ff"></span>运行中
+    </div>
+    <sc-for list="{{running}}" as="item" hint-placeholder-count="2">
+      <button class="row" style="width: 100%; box-sizing: border-box; display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 9px">
+        <img src="{{item.icon}}" alt="{{item.agent}}" style="width: 34px; height: 34px; flex: none; margin: -2px; object-fit: contain">
+        <span style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px">
+          <span style="display: flex; align-items: baseline; gap: 8px">
+            <span style="flex: 1; min-width: 0; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{item.title}}</span>
+            <span style="flex: none; font-size: 11px; color: #6cb4ff; font-variant-numeric: tabular-nums">{{item.time}}</span>
+          </span>
+          <span style="display: flex; align-items: center; gap: 6px; font-size: 11px; color: #a1a1a6; min-width: 0">
+            <span class="pulse" style="width: 6px; height: 6px; flex: none; border-radius: 3px; background: #0a84ff"></span>
+            <span style="min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{item.text}}</span>
+          </span>
+        </span>
+      </button>
+    </sc-for>
+
+    <button class="row" style="width: 100%; box-sizing: border-box; display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 9px; font-size: 12px; color: #a1a1a6">
+      <span style="width: 6px; height: 6px; border-radius: 3px; background: #636366"></span>
+      <span style="flex: 1">空闲 · 2 个会话</span>
+      <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true"><path d="M3.5 2l3 3-3 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+    </button>
+
+    <div style="height: 0.5px; background: rgba(255,255,255,0.14); margin: 2px 4px"></div>
+
+    <div style="display: flex; align-items: center; gap: 2px">
+      <button class="foot" style="padding: 6px 8px; border-radius: 7px; font-size: 12px">全部标为已读</button>
+      <span style="flex: 1"></span>
+      <button class="foot" aria-label="暂停通知 1 小时" style="width: 30px; height: 28px; border-radius: 7px; display: flex; align-items: center; justify-content: center; color: #c7c7cc">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 2.4a3.6 3.6 0 0 0-3.6 3.6v2.4L3.1 10.6h9.8L11.6 8.4V6A3.6 3.6 0 0 0 8 2.4z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"></path><path d="M6.4 12.6a1.6 1.6 0 0 0 3.2 0" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"></path></svg>
+      </button>
+      <button class="foot" aria-label="设置" style="width: 30px; height: 28px; border-radius: 7px; display: flex; align-items: center; justify-content: center; color: #c7c7cc">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2.5 4.5h6M12.5 4.5h1M2.5 11.5h1M7.5 11.5h6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"></path><circle cx="10.5" cy="4.5" r="1.8" stroke="currentColor" stroke-width="1.3"></circle><circle cx="5.5" cy="11.5" r="1.8" stroke="currentColor" stroke-width="1.3"></circle></svg>
+      </button>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1200,"height":800}}'>
+class Component extends DCLogic {
+  renderVals() {
+    var mono = "ui-monospace, 'SF Mono', Menlo, monospace";
+    var sans = "inherit";
+    var t = {
+      cc: { agent: 'Claude Code', icon: '/_blob/18d07303b0717398b39497b23d9aae11' },
+      cx: { agent: 'Codex', icon: '/_blob/fe93cbd31baa4b8fa86971de22e08179' },
+      ds: { agent: 'DeepSeek Harness', icon: '/_blob/882619bf5b7467faacedb8a485fbee4f' },
+      ag: { agent: 'Antigravity', icon: '/_blob/06f762b21403b24c4857b9b9cc876ca8' }
+    };
+    function s(k, o) { return Object.assign({}, t[k], o); }
+    return {
+      waiting: [
+        s('cx', { title: '重构 Cookie 同步逻辑', cwd: '115-cookie', time: '4 分钟', label: '等待授权', text: 'git push --force origin main', font: mono }),
+        s('cc', { title: '多 agent 会话监控面板', cwd: 'agent-monitor', time: '1 分钟', label: '在问你', text: '第一版做成哪种形态？', font: sans })
+      ],
+      done: [
+        s('ag', { title: 'Loon 规则整理', cwd: 'loon-rea', time: '12 分钟前', text: '已生成 3 个文件，测试全部通过' })
+      ],
+      running: [
+        s('ds', { title: 'iStat Menus 显示模块分析', cwd: 'istat-menus-rea', time: '2:31', text: '正在运行 Bash · pnpm test' }),
+        s('cc', { title: 'Hyperknow 学习要点', cwd: 'ai-plan-pilot', time: '0:48', text: '正在思考…' })
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

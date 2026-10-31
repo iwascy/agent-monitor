@@ -1,0 +1,5 @@
+{"type":"session","id":"dsh-uuid-completed","createdAt":1700000000000,"cwd":"/Users/cy/code/test-dsh"}
+{"type":"session/title","data":{"title":"DSH 已完成测试"}}
+{"type":"turn/start","seq":1,"time":1700000001000}
+{"type":"assistant/message","data":{"turn":1,"step":1,"message":{"role":"assistant","content":[{"type":"text","text":"构建顺利完成，产物已打包。"}]}}}
+{"type":"turn/end","seq":2,"time":1700000002000}
