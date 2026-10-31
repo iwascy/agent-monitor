@@ -1,0 +1,4 @@
+{"type":"session_meta","payload":{"session_id":"cx-uuid-waiting-exec","cwd":"/Users/cy/code/nas"}}
+{"type":"event_msg","payload":{"type":"task_started"}}
+{"type":"response_item","payload":{"type":"custom_tool_call","name":"exec","call_id":"c1","arguments":{"cmd":"systemctl restart nas"}}}
+{"type":"event_msg","payload":{"type":"exec_approval_request","call_id":"c1","command":"systemctl restart nas"}}

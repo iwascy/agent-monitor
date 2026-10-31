@@ -1,0 +1,4 @@
+{"id":"cx-uuid-waiting-exec","thread_name":"修复 NAS 启动","updated_at":"2026-11-01T04:00:00Z"}
+{"id":"cx-uuid-waiting-input","thread_name":"重构 Cookie 逻辑","updated_at":"2026-11-01T04:00:00Z"}
+{"id":"cx-uuid-running","thread_name":"正在巡检服务器","updated_at":"2026-11-01T04:00:00Z"}
+{"id":"cx-uuid-completed","thread_name":"排查 HDMI 信号","updated_at":"2026-11-01T04:00:00Z"}
