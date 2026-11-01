@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 import SQLite3
@@ -726,6 +727,41 @@ struct AgentMonitorCoreTests {
     }
 
     // MARK: - UI review #2 regressions
+
+    /// Renders the menu bar image at 2x under `appearance` and returns the brightness and alpha
+    /// of a pixel on the left edge of the rounded rectangle (x = 1.5pt, y = 8.2pt from the top).
+    private func glyphPixel(appearanceName: NSAppearance.Name) throws -> (brightness: CGFloat, alpha: CGFloat) {
+        // A fresh image per appearance: NSImage may cache the rendering of a drawing handler
+        let image = MenuBarIconRenderer.image(highestState: .running, waitingCount: 0, isPaused: false)
+        let rep = try #require(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 32, pixelsHigh: 32, bitsPerSample: 8, samplesPerPixel: 4,
+            hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        ))
+        rep.size = NSSize(width: 16, height: 16)
+
+        let appearance = try #require(NSAppearance(named: appearanceName))
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        appearance.performAsCurrentDrawingAppearance {
+            image.draw(in: NSRect(x: 0, y: 0, width: 16, height: 16))
+        }
+        NSGraphicsContext.restoreGraphicsState()
+
+        // colorAt(x:y:) uses a top-left origin
+        let color = try #require(rep.colorAt(x: 3, y: 16)?.usingColorSpace(.deviceRGB))
+        return (color.brightnessComponent, color.alphaComponent)
+    }
+
+    @Test("MenuBarIconRenderer: glyph is dark on a light menu bar and light on a dark one")
+    func testMenuBarIconGlyphFollowsAppearance() throws {
+        let light = try glyphPixel(appearanceName: .aqua)
+        #expect(light.alpha > 0.5)
+        #expect(light.brightness < 0.3)
+
+        let dark = try glyphPixel(appearanceName: .darkAqua)
+        #expect(dark.alpha > 0.5)
+        #expect(dark.brightness > 0.7)
+    }
 
     @Test("NotificationFormatter: commands are kept verbatim")
     func testNotificationBodyKeepsCommands() {

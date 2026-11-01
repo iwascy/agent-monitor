@@ -1,3 +1,13 @@
+// Captures menu bar, panel and notification screenshots into docs/screenshots/.
+//
+// Side effects while it runs (both are undone at the end):
+// - temporarily switches the system light/dark appearance, then restores the original setting;
+// - quits a running AgentMonitor, then relaunches build/AgentMonitor.app if it was running before.
+//
+// Note: on this macOS the menu bar follows the wallpaper, not the light/dark setting, so the
+// "light" and "dark" menu bar captures can look identical. Glyph colour per appearance is covered
+// by the MenuBarIconRenderer unit test instead.
+
 import AppKit
 import CoreGraphics
 import Foundation
@@ -17,6 +27,10 @@ func runBash(_ cmd: String) -> String {
 func setDarkMode(_ dark: Bool) {
     _ = runBash("osascript -e 'tell application \"System Events\" to tell appearance preferences to set dark mode to \(dark)'")
     Thread.sleep(forTimeInterval: 0.8)
+}
+
+func isDarkModeEnabled() -> Bool {
+    runBash("osascript -e 'tell application \"System Events\" to tell appearance preferences to get dark mode'") == "true"
 }
 
 func killAgentMonitor() {
@@ -75,6 +89,9 @@ let destDir = "/Users/cy/code/agent-monitor/docs/screenshots"
 try? fm.createDirectory(atPath: destDir, withIntermediateDirectories: true)
 
 print("==> Starting automated screenshot captures...")
+
+let originalDarkMode = isDarkModeEnabled()
+let wasAgentMonitorRunning = !runBash("pgrep -x AgentMonitor || true").isEmpty
 
 let menuStates = [
     ("idle", "idle"),
@@ -155,6 +172,9 @@ for isDark in [false, true] {
     killAgentMonitor()
 }
 
-// Restore light mode
-setDarkMode(false)
+// Restore the user's original appearance and running app
+setDarkMode(originalDarkMode)
+if wasAgentMonitorRunning {
+    _ = runBash("open /Users/cy/code/agent-monitor/build/AgentMonitor.app")
+}
 print("==> All menu bar and panel captures completed.")
