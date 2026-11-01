@@ -3,6 +3,7 @@ import AgentMonitorCore
 
 struct FilterBar: View {
     @ObservedObject var viewModel: MonitorViewModel
+    @Namespace private var ns
 
     var body: some View {
         let waitingCount = viewModel.sessions.filter { $0.state == .waitingForUser }.count
@@ -10,50 +11,55 @@ struct FilterBar: View {
         let runningCount = viewModel.sessions.filter { $0.state == .running }.count
         let idleCount = viewModel.sessions.filter { $0.state == .idle }.count
 
-        HStack(spacing: 6) {
-            filterCard(count: waitingCount, label: "等你", state: .waitingForUser)
-            filterCard(count: doneCount, label: "已完成", state: .completed)
-            filterCard(count: runningCount, label: "运行中", state: .running)
-            filterCard(count: idleCount, label: "空闲", state: .idle)
+        GlassEffectContainer(spacing: 6) {
+            HStack(spacing: 6) {
+                capsuleButton(state: .waitingForUser, count: waitingCount)
+                capsuleButton(state: .completed, count: doneCount)
+                capsuleButton(state: .running, count: runningCount)
+                capsuleButton(state: .idle, count: idleCount)
+            }
         }
+        .padding(.horizontal, 2)
         .padding(.bottom, 2)
     }
 
-    private func filterCard(
-        count: Int,
-        label: String,
-        state: SessionState
-    ) -> some View {
+    private func capsuleButton(state: SessionState, count: Int) -> some View {
         let isSelected = viewModel.filterState == state
         let tint = state.tint
+        let isDisabled = count == 0
 
         return Button(action: {
-            if viewModel.filterState == state {
-                viewModel.filterState = nil
-            } else {
-                viewModel.filterState = state
+            withAnimation(.bouncy) {
+                if viewModel.filterState == state {
+                    viewModel.filterState = nil
+                } else {
+                    viewModel.filterState = state
+                }
             }
         }) {
-            VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(isDisabled ? AnyShapeStyle(.tertiary) : AnyShapeStyle(tint))
+                    .frame(width: 6, height: 6)
                 Text("\(count)")
-                    .font(.system(size: 18, weight: .bold))
+                    .font(.callout.weight(.semibold))
                     .monospacedDigit()
-                    .foregroundColor(tint)
-                    .lineLimit(1)
-                Text(label)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(isSelected ? .primary : .secondary)
+                    .foregroundStyle(isDisabled ? AnyShapeStyle(.tertiary) : AnyShapeStyle(tint))
+                Text(state.shortTitle)
+                    .font(.caption)
+                    .foregroundStyle(isDisabled ? AnyShapeStyle(.tertiary) : (isSelected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary)))
+                    .fontWeight(isSelected ? .semibold : .regular)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity)
             .padding(.vertical, 7)
-            .padding(.horizontal, 9)
-            .background(isSelected ? AnyShapeStyle(tint.opacity(0.18)) : AnyShapeStyle(.fill.quaternary))
-            .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .stroke(isSelected ? tint : Color.clear, lineWidth: 1.2)
-            )
+            .padding(.horizontal, 4)
         }
         .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .glassEffect(
+            isSelected ? .regular.tint(tint.opacity(0.18)).interactive() : (isDisabled ? .regular : .regular.interactive()),
+            in: .capsule
+        )
+        .glassEffectID(state, in: ns)
     }
 }
