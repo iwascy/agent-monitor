@@ -87,7 +87,15 @@ cat <<'EOF' > "$CONTENTS_DIR/Info.plist"
 EOF
 
 echo "==> Signing application bundle..."
+# A fresh CFBundleVersion per build makes LaunchServices and Notification Center re-read the
+# bundle (including its icon) instead of keeping what they cached on the first launch.
+BUILD_VERSION="$(date +%Y%m%d%H%M%S)"
+/usr/bin/plutil -replace CFBundleVersion -string "$BUILD_VERSION" "$CONTENTS_DIR/Info.plist"
+
 codesign --force --sign - "$APP_DIR"
+
+echo "==> Registering with LaunchServices (build $BUILD_VERSION)..."
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP_DIR"
 
 echo "==> Successfully built: $REPO_ROOT/$APP_DIR"
 echo "To launch: open $REPO_ROOT/$APP_DIR"
