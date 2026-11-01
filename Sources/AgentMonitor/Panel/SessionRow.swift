@@ -10,7 +10,9 @@ struct SessionRow: View {
 
     var body: some View {
         Button(action: {
-            viewModel.markAsRead(id: session.id)
+            withAnimation(.smooth) {
+                viewModel.markAsRead(id: session.id)
+            }
             activateApp(for: session.kind, entrypoint: session.entrypoint, cwd: session.cwd)
         }) {
             HStack(alignment: session.state == .running ? .center : .top, spacing: 10) {

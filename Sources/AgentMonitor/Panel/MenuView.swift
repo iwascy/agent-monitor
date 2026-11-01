@@ -24,26 +24,9 @@ public struct MenuView: View {
             PanelHeader(viewModel: viewModel)
             FilterBar(viewModel: viewModel)
             SessionList(viewModel: viewModel)
-            bottomBarView
         }
         .padding(10)
         .frame(width: 384)
         .preferredColorScheme(forcedColorScheme)
-    }
-
-    // MARK: - Bottom Bar (to be refactored in #5)
-    private var bottomBarView: some View {
-        HStack {
-            Button("全部标为已读") {
-                viewModel.markAllAsRead()
-            }
-            .font(.system(size: 12))
-            .foregroundColor(.primary)
-            .buttonStyle(.plain)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            Spacer()
-        }
-        .padding(.top, 2)
     }
 }

@@ -87,10 +87,29 @@ struct SessionList: View {
                     .padding(.vertical, 24)
                 }
             }
+            .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 1)
         }
-        .frame(maxHeight: 520)
         .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
+        .safeAreaInset(edge: .bottom) {
+            if viewModel.sessions.contains(where: { $0.state == .completed }) {
+                Button(action: {
+                    withAnimation(.smooth) {
+                        viewModel.markAllAsRead()
+                    }
+                }) {
+                    Label("全部标为已读", systemImage: "checkmark")
+                }
+                .buttonStyle(.glass)
+                .controlSize(.large)
+                .glassEffectTransition(.materialize)
+                .padding(.top, 4)
+                .padding(.bottom, 2)
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxHeight: 520)
     }
 
     private func sectionHeader(title: String, dotColor: Color) -> some View {
