@@ -27,6 +27,7 @@ public struct MenuView: View {
         }
         .padding(10)
         .frame(width: 384)
+        .fixedSize(horizontal: false, vertical: true)
         .preferredColorScheme(forcedColorScheme)
     }
 }
