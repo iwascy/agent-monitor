@@ -124,17 +124,11 @@ public final class DshAdapter: AgentAdapter, @unchecked Sendable {
                         detailIsCommand = summary.detailIsCommand
                     } else if summary.isTurnActive {
                         state = .running
-                    } else if summary.hasCompletedTurn {
-                        state = .completed
-                    } else {
-                        state = .running
-                    }
-                } else {
-                    if summary.hasCompletedTurn {
-                        state = .completed
                     } else {
                         state = .idle
                     }
+                } else {
+                    state = .idle
                 }
 
                 let session = AgentSession(

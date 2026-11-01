@@ -77,7 +77,7 @@ struct AgentMonitorCoreTests {
         #expect(sessions.count == 1)
         let s = try #require(sessions.first)
         #expect(s.id == "claudeCode:cc-session-completed-3")
-        #expect(s.state == .completed)
+        #expect(s.state == .idle)
         #expect(s.detail?.contains("测试全部通过") == true)
     }
 
@@ -162,7 +162,7 @@ struct AgentMonitorCoreTests {
         #expect(running.title == "正在巡检服务器")
 
         let completed = try #require(sessions.first(where: { $0.id == "codex:cx-uuid-completed" }))
-        #expect(completed.state == .completed)
+        #expect(completed.state == .idle)
         #expect(completed.title == "排查 HDMI 信号")
         #expect(completed.detail?.contains("HDMI EDID") == true)
     }
@@ -199,7 +199,7 @@ struct AgentMonitorCoreTests {
         #expect(running.title == "DSH 正在运行测试")
 
         let completed = try #require(sessions.first(where: { $0.id == "dsh:dsh-uuid-completed" }))
-        #expect(completed.state == .completed)
+        #expect(completed.state == .idle)
         #expect(completed.detail == "构建顺利完成，产物已打包。")
         #expect(completed.title == "DSH 已完成测试")
     }
@@ -233,7 +233,7 @@ struct AgentMonitorCoreTests {
         #expect(running.title == "Antigravity 运行中会话")
 
         let completed = try #require(sessions.first(where: { $0.id == "antigravity:ag-uuid-completed" }))
-        #expect(completed.state == .completed)
+        #expect(completed.state == .idle)
         #expect(completed.detail == "已生成 5 个组件并更新文档")
         #expect(completed.title == "Antigravity 已完成任务")
     }
@@ -293,20 +293,27 @@ struct AgentMonitorCoreTests {
         #expect(t2.count == 1)
         #expect(t2.first == .stateChanged(session: s1Waiting, from: .running, to: .waitingForUser))
 
-        // 3. Add completed session
-        let s2 = AgentSession(id: "claudeCode:s2", kind: .claudeCode, title: "Session 2", state: .completed)
+        // 3. Add session that is reported as idle on first scan -> stays idle
+        let s2 = AgentSession(id: "claudeCode:s2", kind: .claudeCode, title: "Session 2", state: .idle)
         mock.mockSessions = [s1Waiting, s2]
+        _ = store.refresh()
+
+        // 4. Upgrade: s1Waiting transitions to idle -> promoted to completed!
+        let s1Idle = AgentSession(id: "claudeCode:s1", kind: .claudeCode, title: "Session 1", state: .idle)
+        mock.mockSessions = [s1Idle, s2]
         _ = store.refresh()
 
         let sorted = store.currentSessions
         #expect(sorted.count == 2)
-        #expect(sorted[0].id == "claudeCode:s1") // waitingForUser is rank 0
-        #expect(sorted[1].id == "claudeCode:s2") // completed is rank 1
+        #expect(sorted[0].id == "claudeCode:s1") // completed is rank 1
+        #expect(sorted[0].state == .completed)
+        #expect(sorted[1].id == "claudeCode:s2") // idle is rank 3
+        #expect(sorted[1].state == .idle)
 
-        // 4. Mark s2 as read
-        store.markAsRead(id: "claudeCode:s2")
+        // 5. Mark s1 as read
+        store.markAsRead(id: "claudeCode:s1")
         let afterRead = store.currentSessions
-        let s2After = try #require(afterRead.first(where: { $0.id == "claudeCode:s2" }))
-        #expect(s2After.state == .idle)
+        let s1After = try #require(afterRead.first(where: { $0.id == "claudeCode:s1" }))
+        #expect(s1After.state == .idle)
     }
 }

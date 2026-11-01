@@ -164,23 +164,34 @@ public final class SessionStore: @unchecked Sendable {
                 continue
             }
 
-            // Apply read status for completed sessions
-            if fresh.state == .completed {
-                let key = "\(fresh.id):\(Int64(fresh.lastActivity.timeIntervalSince1970))"
-                if readCompletedKeys.contains(key) {
-                    fresh.state = .idle
-                }
-            } else if fresh.state == .running {
-                // Clear any read key for this session if it started running again
-                readCompletedKeys = readCompletedKeys.filter { !$0.hasPrefix("\(fresh.id):") }
-            }
-
             if let existing = sessionCache[id] {
+                // Upgrade rule: running or waitingForUser -> idle transitions to completed
+                if fresh.state == .idle {
+                    let readKey = "\(fresh.id):\(Int64(fresh.lastActivity.timeIntervalSince1970))"
+                    if existing.state == .running || existing.state == .waitingForUser {
+                        if !readCompletedKeys.contains(readKey) {
+                            fresh.state = .completed
+                        }
+                    } else if existing.state == .completed {
+                        // Maintain completed state until marked as read
+                        if !readCompletedKeys.contains(readKey) {
+                            fresh.state = .completed
+                        }
+                    }
+                } else if fresh.state == .running {
+                    // Clear read status if session resumes running
+                    readCompletedKeys = readCompletedKeys.filter { !$0.hasPrefix("\(fresh.id):") }
+                }
+
                 if existing.state != fresh.state {
                     transitions.append(.stateChanged(session: fresh, from: existing.state, to: fresh.state))
                 }
                 sessionCache[id] = fresh
             } else {
+                // First discovery: idle stays idle
+                if fresh.state == .completed {
+                    fresh.state = .idle
+                }
                 sessionCache[id] = fresh
                 transitions.append(.added(fresh))
             }

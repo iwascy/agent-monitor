@@ -110,13 +110,8 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
                 }
             } else {
                 // CASCADE_RUN_STATUS_IDLE
-                if isLocked {
-                    state = .completed
-                    detail = !row.preview.isEmpty ? row.preview : nil
-                } else {
-                    state = .completed
-                    detail = !row.preview.isEmpty ? row.preview : nil
-                }
+                state = .idle
+                detail = !row.preview.isEmpty ? row.preview : nil
             }
 
             let session = AgentSession(

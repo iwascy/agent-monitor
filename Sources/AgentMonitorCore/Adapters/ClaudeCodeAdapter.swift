@@ -139,7 +139,7 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
                 }
             } else {
                 // status == "idle"
-                state = .completed
+                state = .idle
                 detail = transcriptSummary?.lastAssistantText
             }
 

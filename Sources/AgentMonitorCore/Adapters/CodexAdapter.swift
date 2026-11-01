@@ -112,7 +112,7 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
                 waitingLabel = "在问你"
                 detailIsCommand = false
             case .taskComplete:
-                state = .completed
+                state = .idle
             case .taskStarted, .inProgressTool:
                 if isRunning {
                     state = .running
