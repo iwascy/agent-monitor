@@ -32,7 +32,8 @@ public final class DshAdapter: AgentAdapter, @unchecked Sendable {
             guard fd >= 0 else { return false }
             defer { close(fd) }
 
-            let ret = flock(fd, LOCK_EX | LOCK_NB)
+            // Probe with LOCK_SH | LOCK_NB so we don't conflict with dsh resuming sessions
+            let ret = flock(fd, LOCK_SH | LOCK_NB)
             if ret != 0 {
                 let err = errno
                 return err == EWOULDBLOCK || err == EAGAIN
@@ -92,14 +93,14 @@ public final class DshAdapter: AgentAdapter, @unchecked Sendable {
                 let mtime = resourceValues?.contentModificationDate ?? now
                 let fileSize = resourceValues?.fileSize ?? 0
 
-                // Check lock state
-                let lockFile = sessionDir.appendingPathComponent("session.lock")
-                let isLocked = isLockHeld(lockFile.path)
-
-                // If not locked and older than max age, ignore
-                if !isLocked && now.timeIntervalSince(mtime) > maxAgeSeconds {
+                // Filter by mtime first before any lock probing!
+                if now.timeIntervalSince(mtime) > maxAgeSeconds {
                     continue
                 }
+
+                // Check lock state only for sessions within the active time window
+                let lockFile = sessionDir.appendingPathComponent("session.lock")
+                let isLocked = isLockHeld(lockFile.path)
 
                 // Parse session events (cached)
                 guard let summary = getOrParseSummary(fileURL: targetDataFile, mtime: mtime, fileSize: fileSize) else {
@@ -125,6 +126,7 @@ public final class DshAdapter: AgentAdapter, @unchecked Sendable {
                     } else if summary.isTurnActive {
                         state = .running
                     } else {
+                        // Stale locked session without active turn -> idle
                         state = .idle
                     }
                 } else {
@@ -237,22 +239,55 @@ public final class DshAdapter: AgentAdapter, @unchecked Sendable {
                 summary.detailIsCommand = false
             } else if type == "turn/end" {
                 summary.isTurnActive = false
-                summary.hasCompletedTurn = true
                 summary.hasWaitingQuestion = false
                 summary.hasPendingApproval = false
-                summary.detail = lastAssistantText
+                if let data = json["data"] as? [String: Any],
+                   let reason = data["reason"] as? [String: Any],
+                   let kind = reason["kind"] as? String {
+                    if kind == "completed" {
+                        summary.hasCompletedTurn = true
+                        summary.detail = lastAssistantText
+                    } else {
+                        summary.hasCompletedTurn = false
+                    }
+                } else {
+                    summary.hasCompletedTurn = true
+                    summary.detail = lastAssistantText
+                }
                 summary.detailIsCommand = false
             } else if type == "tool/call" {
                 if let data = json["data"] as? [String: Any] {
                     let toolName = data["name"] as? String ?? "工具"
                     let callId = data["callId"] as? String ?? UUID().uuidString
-                    let cmd = data["command"] as? String ?? data["cmd"] as? String
+                    
+                    var cmd = data["command"] as? String ?? data["cmd"] as? String
+                    var question = data["question"] as? String ?? data["prompt"] as? String
+
+                    // Parse arguments if it is a JSON string or dictionary
+                    if let argsStr = data["arguments"] as? String,
+                       let argsData = argsStr.data(using: .utf8),
+                       let argsObj = try? JSONSerialization.jsonObject(with: argsData) as? [String: Any] {
+                        if cmd == nil {
+                            cmd = argsObj["command"] as? String ?? argsObj["cmd"] as? String
+                        }
+                        if question == nil {
+                            question = argsObj["question"] as? String ?? argsObj["prompt"] as? String
+                        }
+                    } else if let argsObj = data["arguments"] as? [String: Any] {
+                        if cmd == nil {
+                            cmd = argsObj["command"] as? String ?? argsObj["cmd"] as? String
+                        }
+                        if question == nil {
+                            question = argsObj["question"] as? String ?? argsObj["prompt"] as? String
+                        }
+                    }
+
                     pendingCallIds.insert(callId)
 
                     if toolName == "ask_user_question" || toolName == "ask_question" {
                         questionCallIds.insert(callId)
                         summary.hasWaitingQuestion = true
-                        summary.detail = data["question"] as? String ?? data["prompt"] as? String ?? "请确认下一步操作"
+                        summary.detail = question ?? "请确认下一步操作"
                         summary.detailIsCommand = false
                     } else {
                         let display = cmd != nil ? "正在运行 \(toolName) · \(cmd!)" : "正在运行 \(toolName)…"
@@ -261,11 +296,19 @@ public final class DshAdapter: AgentAdapter, @unchecked Sendable {
                     }
                 }
             } else if type == "tool/result" {
-                if let data = json["data"] as? [String: Any], let callId = data["callId"] as? String {
-                    pendingCallIds.remove(callId)
-                    questionCallIds.remove(callId)
-                    if questionCallIds.isEmpty {
-                        summary.hasWaitingQuestion = false
+                if let data = json["data"] as? [String: Any] {
+                    var callId = data["toolCallId"] as? String ?? data["callId"] as? String
+                    if callId == nil,
+                       let msg = data["message"] as? [String: Any],
+                       let src = msg["source"] as? [String: Any] {
+                        callId = src["callId"] as? String
+                    }
+                    if let cid = callId {
+                        pendingCallIds.remove(cid)
+                        questionCallIds.remove(cid)
+                        if questionCallIds.isEmpty {
+                            summary.hasWaitingQuestion = false
+                        }
                     }
                 }
             } else if type == "assistant/message" {
@@ -312,9 +355,7 @@ public final class DshAdapter: AgentAdapter, @unchecked Sendable {
             guard let content = String(data: data, encoding: .utf8) else {
                 return []
             }
-            let allLines = content.components(separatedBy: .newlines)
-            // Take the last 100 lines for efficiency
-            return Array(allLines.suffix(100))
+            return content.components(separatedBy: .newlines)
         } catch {
             return []
         }

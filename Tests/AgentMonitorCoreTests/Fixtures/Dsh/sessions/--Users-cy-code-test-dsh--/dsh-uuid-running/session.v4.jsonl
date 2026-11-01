@@ -1,4 +1,4 @@
 {"type":"session","id":"dsh-uuid-running","createdAt":1700000000000,"cwd":"/Users/cy/code/test-dsh"}
 {"type":"session/title","data":{"title":"DSH 正在运行测试"}}
 {"type":"turn/start","seq":1,"time":1700000001000}
-{"type":"tool/call","data":{"name":"bash","callId":"c-102","command":"pnpm build"}}
+{"type":"tool/call","data":{"turn":1,"step":1,"callId":"c-102","name":"bash","arguments":"{\"command\":\"pnpm build\"}"}}
