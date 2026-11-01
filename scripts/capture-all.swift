@@ -128,48 +128,66 @@ for isDark in [false, true] {
         killAgentMonitor()
     }
 
-    // 2. Panel screenshot
-    let panelEnv = [
-        "AGENT_MONITOR_MOCK_DATA": "1",
-        "AGENT_MONITOR_COLOR_SCHEME": modeName
+    // 2. Panel screenshots
+    let panelConfigs: [(name: String, env: [String: String])] = [
+        ("panel", [
+            "AGENT_MONITOR_MOCK_DATA": "1"
+        ]),
+        ("panel-waiting", [
+            "AGENT_MONITOR_MOCK_DATA": "1",
+            "AGENT_MONITOR_FILTER": "waiting"
+        ]),
+        ("panel-idle-expanded", [
+            "AGENT_MONITOR_MOCK_DATA": "1",
+            "AGENT_MONITOR_IDLE_EXPANDED": "1"
+        ]),
+        ("panel-empty", [
+            "AGENT_MONITOR_MOCK_DATA": "empty"
+        ])
     ]
-    let proc = launchApp(env: panelEnv)
-    if let rect = getStatusItemRect(pid: proc.processIdentifier) {
-        let clickPt = CGPoint(x: rect.midX, y: rect.midY)
-        clickAt(point: clickPt)
-        Thread.sleep(forTimeInterval: 0.8)
 
-        // Find the window
-        var panelBounds: CGRect? = nil
-        let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
-        for w in list {
-            let pid = w[kCGWindowOwnerPID as String] as? Int32 ?? 0
-            if pid == proc.processIdentifier {
-                if let dict = w[kCGWindowBounds as String] as? [String: Any],
-                   let x = dict["X"] as? Double,
-                   let y = dict["Y"] as? Double,
-                   let w = dict["Width"] as? Double,
-                   let h = dict["Height"] as? Double {
-                    panelBounds = CGRect(x: x, y: y, width: w, height: h)
-                    break
+    for config in panelConfigs {
+        var env = config.env
+        env["AGENT_MONITOR_COLOR_SCHEME"] = modeName
+
+        let proc = launchApp(env: env)
+        if let rect = getStatusItemRect(pid: proc.processIdentifier) {
+            let clickPt = CGPoint(x: rect.midX, y: rect.midY)
+            clickAt(point: clickPt)
+            Thread.sleep(forTimeInterval: 0.8)
+
+            // Find the window
+            var panelBounds: CGRect? = nil
+            let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+            for w in list {
+                let pid = w[kCGWindowOwnerPID as String] as? Int32 ?? 0
+                if pid == proc.processIdentifier {
+                    if let dict = w[kCGWindowBounds as String] as? [String: Any],
+                       let x = dict["X"] as? Double,
+                       let y = dict["Y"] as? Double,
+                       let w = dict["Width"] as? Double,
+                       let h = dict["Height"] as? Double {
+                        panelBounds = CGRect(x: x, y: y, width: w, height: h)
+                        break
+                    }
                 }
             }
-        }
 
-        if let b = panelBounds {
-            let outPath = "\(destDir)/panel-\(modeName).png"
-            let captureX = Int(b.origin.x - 10)
-            let captureY = Int(b.origin.y - 4)
-            let captureW = Int(b.size.width + 20)
-            let captureH = Int(b.size.height + 20)
-            _ = runBash("screencapture -R \(captureX),\(captureY),\(captureW),\(captureH) '\(outPath)'")
-            print("Captured: panel-\(modeName).png")
-        } else {
-            print("Failed to find panel window bounds for \(modeName)")
+            if let b = panelBounds {
+                let outPath = "\(destDir)/\(config.name)-\(modeName).png"
+                let captureX = Int(b.origin.x - 10)
+                let captureY = Int(b.origin.y - 4)
+                let captureW = Int(b.size.width + 20)
+                let captureH = Int(b.size.height + 20)
+                _ = runBash("screencapture -R \(captureX),\(captureY),\(captureW),\(captureH) '\(outPath)'")
+                print("Captured: \(config.name)-\(modeName).png")
+            } else {
+                print("Failed to find panel window bounds for \(config.name)-\(modeName)")
+            }
         }
+        proc.terminate()
+        killAgentMonitor()
     }
-    proc.terminate()
-    killAgentMonitor()
 }
 
 // Restore the user's original appearance and running app

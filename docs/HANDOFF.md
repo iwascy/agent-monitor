@@ -257,4 +257,51 @@ Initial transitions generated: 3 (suppressed from notifications)
   - 系统 `MenuBarExtra(.window)` 已经自带完整的原生液态玻璃/材质背景（具有毛玻璃模糊穿透效果、系统标准连续曲线圆角与投影）。
   - **最终选择**：**方案 a（首选）**，保持不给根视图额外添加背景或材质，由系统原生窗口全权负责背景材质渲染，避免多层材质叠加大面积失真。
 
+### 5.2 提交历史与工作条目对应清单
+| 条目 | 提交 Hash | 提交信息 | 核心改动说明 |
+|---|---|---|---|
+| **#1** | `c9a86e4` | `chore(platform): bump to macOS 26 and probe window background (#1)` | SPM 6.2 + macOS 26 升级，探针验证系统窗口背景自带毛玻璃材质并采纳方案 a |
+| **#2** | `2d840d5` | `refactor(panel): split MenuView and replace hex colors with semantic styles (#2)` | 拆分 `MenuView` 为 `Panel/` 7 个独立组件文件，彻底删除 `Palette` 与 `Color(hex:)`，引入系统语义色 |
+| **#3** | `a11e554` | `feat(panel): glass header and filter bar (#3)` | 头部玻璃圆形按钮组（铃铛/设置），4 枚等宽玻璃筛选胶囊与 `@Namespace` 切换动效 |
+| **#4** | `9753484` | `feat(panel): session list maxHeight, scroll edges and inline hover (#4)` | 合并会话行为 `SessionRow`，限制 `maxHeight: 520pt` 与滚动边缘软淡出，行内独立 hover，ViewModel 移除 `hoveredSessionId` |
+| **#5** | `67d0bb1` | `feat(panel): floating mark-all-read glass button and smooth transitions (#5)` | `.safeAreaInset(edge: .bottom)` 浮动大玻璃胶囊按钮，`.glassEffectTransition(.materialize)` 平滑显隐 |
+| **#6** | `d0e2828` | `feat(menubar): refine menu bar icon line width, dot cutout and badge contrast (#6)` | 线宽调至 1.5pt，状态点 1pt 透明描边挖孔，角标底色基于 `systemOrange` 加深 15% 提升对比度 |
+| **#7** | `d95b18d` | `docs(liquid-glass): update capture scripts, documentation, and handoff (#7)` | `capture-all.swift` 扩充多状态面板截图，README 重写 UI 设计章节，完善交接文档 |
+
+### 5.3 关键设计实现与技术选型记录
+
+1. **设置 Menu 样式**：
+   - 采用原生 SwiftUI 组合样式：
+     ```swift
+     Menu {
+         ...
+     } label: {
+         Image(systemName: "slider.horizontal.3")
+     }
+     .menuStyle(.button)
+     .buttonStyle(.glass)
+     .buttonBorderShape(.circle)
+     .controlSize(.regular)
+     .menuIndicator(.hidden)
+     ```
+   - 实测在 macOS 26+ 下原生支持该组合，无需额外手动给 label 添加包装层即可呈现完整的圆形液态玻璃按钮与下拉弹出功能。
+
+2. **CommandLineTools 下 `@State` 宏插件兼容**：
+   - macOS 26 SDK 中引入了 `@attached public macro State() = #externalMacro(module: "SwiftUIMacros", type: "StateMacro")`，而在无 Xcode 完整安装包的独立 Command Line Tools 环境下，缺少 `libSwiftUIMacros.dylib`，会导致直接使用 `@State private var isHovered` 报找不到外部宏错误。
+   - 在 `StatusStyle.swift` 中定义了零依赖的 `@LocalState` 属性包装器，内部直接封装 `SwiftUI.State<Value>` 并遵循 `DynamicProperty`，语义与运行期表现 100% 等同于原生 SwiftUI State，同时完全规避编译器查找缺失外部宏的问题。
+
+3. **菜单栏角标可读性与对比度优化**：
+   - 经实测计算，纯白文字在未加深的原始 `NSColor.systemOrange` 上的对比度仅为 ~2.31:1，在浅色半透明菜单栏下小字号（10.5pt）辨识度不足。
+   - 将角标底色调整为 `systemOrange` 在 sRGB 空间加深 15% 的版本（`r: 0.85, g: 0.47, b: 0.133`），白字对比度大幅提升至 **3.16:1**，且保持纯正活力橙色调。
+
+4. **滚动区域最大高度与窗口自适应收缩**：
+   - 会话列表区域外层设 `ScrollView`，配合 `.fixedSize(horizontal: false, vertical: true)` 与 `.frame(maxHeight: 520)`：
+     - 当会话数量较少时（如 1~3 条），面板高度随内容自适应紧凑收缩；
+     - 当会话数量较多时（经 16 条大数据量压测验证，`AGENT_MONITOR_MOCK_DATA=large`），整体面板窗口高度稳定锁定在 620pt 上限，不遮挡屏幕，且顶部和底部边缘在滚动时自然应用 `.scrollEdgeEffectStyle(.soft, for: [.top, .bottom])` 柔和渐变过渡。
+
+5. **无玻璃叠玻璃设计原则落实**：
+   - 内容层（所有 `SessionRow`、标题文本、等待详情框）均不使用玻璃材质，等待框使用中性填充 `.fill.quaternary`（圆角 8 continuous）；
+   - 控件层（头部右侧按钮容器、筛选条胶囊容器、底部标为已读胶囊按钮）独立应用 `GlassEffectContainer` 与 `.buttonStyle(.glass)`。相邻按钮严格封装在同一个容器中，彻底根除玻璃多层相互叠加导致的折射白雾问题。
+
+
 

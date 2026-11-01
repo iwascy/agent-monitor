@@ -57,8 +57,34 @@ public final class MonitorViewModel: ObservableObject {
         self.sessionStore = sessionStore
         self.isLaunchAtLogin = SMAppService.mainApp.status == .enabled
 
-        if ProcessInfo.processInfo.environment["AGENT_MONITOR_MOCK_DATA"] != nil {
-            self.sessions = MonitorViewModel.mockSessions()
+        let env = ProcessInfo.processInfo.environment
+        if let filter = env["AGENT_MONITOR_FILTER"]?.lowercased() {
+            switch filter {
+            case "waiting":
+                self.filterState = .waitingForUser
+            case "completed":
+                self.filterState = .completed
+            case "running":
+                self.filterState = .running
+            case "idle":
+                self.filterState = .idle
+            default:
+                break
+            }
+        }
+
+        if env["AGENT_MONITOR_IDLE_EXPANDED"] == "1" {
+            self.isIdleExpanded = true
+        }
+
+        if let mock = env["AGENT_MONITOR_MOCK_DATA"] {
+            if mock.lowercased() == "empty" {
+                self.sessions = []
+            } else if mock.lowercased() == "large" {
+                self.sessions = MonitorViewModel.mockSessionsLarge()
+            } else {
+                self.sessions = MonitorViewModel.mockSessions()
+            }
             updatePauseState()
             return
         }
@@ -163,6 +189,99 @@ public final class MonitorViewModel: ObservableObject {
                 detail: "探测完成"
             )
         ]
+    }
+
+    public static func mockSessionsLarge() -> [AgentSession] {
+        var list = mockSessions()
+        let now = Date()
+        let extra: [AgentSession] = [
+            AgentSession(
+                id: "cx:mock-8",
+                kind: .codex,
+                title: "修复 SQL 注入漏洞",
+                cwd: "/Users/cy/code/backend-api",
+                state: .waitingForUser,
+                stateSince: now.addingTimeInterval(-180),
+                lastActivity: now.addingTimeInterval(-180),
+                detail: "cargo test --release",
+                detailIsCommand: true,
+                waitingLabel: "等待授权"
+            ),
+            AgentSession(
+                id: "cc:mock-9",
+                kind: .claudeCode,
+                title: "编写用户注册流程文档",
+                cwd: "/Users/cy/code/docs-site",
+                state: .completed,
+                stateSince: now.addingTimeInterval(-1200),
+                lastActivity: now.addingTimeInterval(-1200),
+                detail: "已更新 docs/auth.md 并校对完成",
+                completedDuration: 184
+            ),
+            AgentSession(
+                id: "ds:mock-10",
+                kind: .dsh,
+                title: "分析内核崩溃转储",
+                cwd: "/Users/cy/code/kernel-debug",
+                state: .running,
+                stateSince: now.addingTimeInterval(-310),
+                lastActivity: now.addingTimeInterval(-310),
+                detail: "正在反编译 mach_kernel"
+            ),
+            AgentSession(
+                id: "ag:mock-11",
+                kind: .antigravity,
+                title: "重构样式与微调动效",
+                cwd: "/Users/cy/code/agent-monitor",
+                state: .running,
+                stateSince: now.addingTimeInterval(-15),
+                lastActivity: now.addingTimeInterval(-15),
+                detail: "正在运行 swift test…"
+            ),
+            AgentSession(
+                id: "cx:mock-12",
+                kind: .codex,
+                title: "迁移 Redis 缓存集群",
+                cwd: "/Users/cy/code/infra-tools",
+                state: .waitingForUser,
+                stateSince: now.addingTimeInterval(-600),
+                lastActivity: now.addingTimeInterval(-600),
+                detail: "确认切换生产流量至主节点？",
+                detailIsCommand: false,
+                waitingLabel: "在问你"
+            ),
+            AgentSession(
+                id: "cc:mock-13",
+                kind: .claudeCode,
+                title: "优化 Webpack 打包耗时",
+                cwd: "/Users/cy/code/web-dashboard",
+                state: .completed,
+                stateSince: now.addingTimeInterval(-1800),
+                lastActivity: now.addingTimeInterval(-1800),
+                detail: "构建时间由 48s 降低至 14s",
+                completedDuration: 520
+            ),
+            AgentSession(
+                id: "ds:mock-14",
+                kind: .dsh,
+                title: "LLM 输出评测脚本",
+                cwd: "/Users/cy/code/eval-tools",
+                state: .idle,
+                lastActivity: now.addingTimeInterval(-14400),
+                detail: "评测完成"
+            ),
+            AgentSession(
+                id: "ag:mock-15",
+                kind: .antigravity,
+                title: "配置 CI 自动化任务",
+                cwd: "/Users/cy/code/ci-scripts",
+                state: .idle,
+                lastActivity: now.addingTimeInterval(-21600),
+                detail: "流水线配置成功"
+            )
+        ]
+        list.append(contentsOf: extra)
+        return list
     }
 
     public func markAsRead(id: String) {

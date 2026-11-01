@@ -72,17 +72,23 @@ open build/AgentMonitor.app
 
 ## UI 与交互设计
 
-严格依据 `docs/design/` 原生级规范实现：
+采用 macOS 原生 **Liquid Glass（液态玻璃）** 设计规范重新构建，严格遵循分层渲染与系统语义色彩系统：
+
 - **菜单栏图标**：
-  - 16pt 矢量圆角矩形，内置状态指示点（橙 `#F0841C` 等你回复 / 绿 `#34C759` 已完成 / 蓝 `#0A84FF` 运行中）。
-  - 有等待会话时，右侧展示 `#C2410C` 胶囊徽标及数量。
-  - 静音/暂停期间显示划线铃铛图标。
-- **弹窗面板 (384pt)**：
-  - 顶部统计卡片：4 列网格（等你 / 已完成 / 运行中 / 空闲），支持点击单项状态过滤。
-  - 会话分组排列：顺序为 等你回复 → 已完成 → 运行中 → 空闲（折叠单行展示）。
-  - 官方应用图标：运行时自动尝试从 `/Applications/Claude.app`、`/Applications/ChatGPT.app`、`/Applications/Antigravity.app` 及 dsh 本地安装包中的 SVG 加载，缺失时降级为双字母着色徽章（CC / CX / DS / AG）。
-  - 会话行：展示耗时、最后活动时间、当前命令详情（SF Mono 等宽字体）或思考摘要。点击标为已读并拉起前台对应 App。
-  - 底部操作栏：一键全部标为已读、暂停通知 1 小时切换、开机自启 (`SMAppService.mainApp`) 及退出选项。
+  - 16pt Retina 矢量轮廓图标，主图形线宽升级为 **1.5pt**，完美对齐 SF Symbols 在 regular 字重下的视觉比重。
+  - 状态指示点改用系统语义色（`systemOrange` 等你回复 / `systemGreen` 已完成 / `systemBlue` 运行中），外圈以 `.clear` 混合模式挖出 1pt 物理级透明间隔圈，在 macOS 透明菜单栏及任意动态壁纸上均清晰分明。
+  - 等待数胶囊角标底色基于 `systemOrange` 计算最佳可读性对比度，搭配 10.5pt `.semibold` 白字。
+  - 静音/暂停期间平滑展示划线铃铛图标。
+- **Liquid Glass 原生面板 (384pt)**：
+  - **控件层与内容层分离**：底层会话列表承托于原生系统窗口材质，绝不玻璃叠玻璃；操作与筛选控件作为浮层采用原生液态玻璃材质。
+  - **头部 (PanelHeader)**：左侧标题与会话/Agent 计数竖排；右侧 `GlassEffectContainer` 容纳圆形玻璃按钮组（`.buttonStyle(.glass)`, `.buttonBorderShape(.circle)`），包含免打扰切换与设置菜单（开机启动 Toggle、退出）。
+  - **筛选条 (FilterBar)**：4 枚等宽玻璃胶囊（等你 / 已完成 / 运行中 / 空闲），挂载 `@Namespace` 与 `glassEffectID` 实现平滑融合形变切换动效；选中态注入轻度高光（≤0.18 透明度状态色），0 会话状态自动降至 `.tertiary` 并禁用。
+  - **会话列表 (SessionList & SessionRow)**：
+    - 合并为单一行架构，采用行内独立 `@LocalState` 悬停动效与 12pt continuous 同心圆角；
+    - 等你回复命令浅底框采用 `.fill.quaternary` 中性底色，命令单行中间截断；
+    - 列表区域限制 `maxHeight: 520pt`，随内容自然收缩，超出时平滑滚动并搭配 `.scrollEdgeEffectStyle(.soft, for: [.top, .bottom])` 柔和淡出边缘。
+  - **底部浮动操作胶囊**：仅在存在未读已完成会话时，通过 `.safeAreaInset(edge: .bottom)` 浮动展示「全部标为已读」大尺寸玻璃胶囊（`.controlSize(.large)`），配合 `.glassEffectTransition(.materialize)` 平滑显隐。
+  - **系统语义色适配**：全面废除 Hex 调色盘，原生适配系统深浅色切换、降低透明度与增加对比度辅助功能设置。
 
 ---
 
