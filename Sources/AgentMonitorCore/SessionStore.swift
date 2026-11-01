@@ -13,6 +13,7 @@ public final class SessionStore: @unchecked Sendable {
     private var sessionCache: [String: AgentSession] = [:]
     private var readCompletedKeys: Set<String> = [] // "\(sessionId):\(completionTimestamp)"
     private var runningStartTimes: [String: Date] = [:]
+    private var isInitialScan = true
     private let lock = NSRecursiveLock()
 
     public var onTransition: (@Sendable (SessionTransition) -> Void)?
@@ -62,7 +63,10 @@ public final class SessionStore: @unchecked Sendable {
             self.pollingTimer = timer
         }
 
-        refresh()
+        // Perform initial refresh asynchronously on workQueue to avoid blocking main thread
+        workQueue.async { [weak self] in
+            self?.refresh()
+        }
     }
 
     public func stop() {
@@ -225,12 +229,20 @@ public final class SessionStore: @unchecked Sendable {
             }
         }
 
+        let isInitial = isInitialScan
+        isInitialScan = false
+
         if !transitions.isEmpty {
             let updated = currentSessions
             onSessionsUpdated?(updated)
-            for t in transitions {
-                onTransition?(t)
+            if !isInitial {
+                for t in transitions {
+                    onTransition?(t)
+                }
             }
+        } else if isInitial {
+            let updated = currentSessions
+            onSessionsUpdated?(updated)
         }
 
         return transitions

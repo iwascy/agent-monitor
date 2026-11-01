@@ -34,12 +34,6 @@ public final class MonitorViewModel: ObservableObject {
         }
 
         sessionStore.start()
-
-        // After initial scan finishes, allow notifications for subsequent changes
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
-            self.notifier.isInitialScan = false
-        }
     }
 
     public func markAsRead(id: String) {

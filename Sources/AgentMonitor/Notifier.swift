@@ -7,7 +7,6 @@ import AgentMonitorCore
 public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     public static let shared = Notifier()
 
-    public var isInitialScan = true
     public var pauseUntil: Date? = nil
 
     private var recentNotifications: [String: (state: SessionState, timestamp: Date)] = [:]
@@ -42,7 +41,6 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     }
 
     public func notify(transition: SessionTransition) {
-        guard !isInitialScan else { return }
         guard !isPaused else { return }
 
         switch transition {
