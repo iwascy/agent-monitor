@@ -22,6 +22,16 @@ public final class MonitorViewModel: ObservableObject {
         return !sessions.contains(where: { $0.state == filter })
     }
 
+    /// Returns true if the "Mark all as read" button should be displayed given current sessions and filter.
+    public static func shouldShowMarkAllAsRead(sessions: [AgentSession], filterState: SessionState?) -> Bool {
+        sessions.contains(where: { $0.state == .completed }) &&
+        (filterState == nil || filterState == .completed)
+    }
+
+    public var showBottomButton: Bool {
+        Self.shouldShowMarkAllAsRead(sessions: sessions, filterState: filterState)
+    }
+
     public func autoClearEmptyFilter() {
         if Self.shouldClearFilter(currentFilter: filterState, sessions: sessions) {
             withAnimation(.bouncy) {

@@ -8,8 +8,7 @@ struct SessionList: View {
     @LocalState private var buttonHeight: CGFloat = 46
 
     private var showBottomButton: Bool {
-        viewModel.sessions.contains(where: { $0.state == .completed }) &&
-        (viewModel.filterState == nil || viewModel.filterState == .completed)
+        viewModel.showBottomButton
     }
 
     var body: some View {
