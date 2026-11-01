@@ -60,10 +60,13 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
                 continue
             }
 
+            guard let lastModified = row.lastModified else {
+                continue
+            }
+
             let lockPath = presenceDir.appendingPathComponent("\(row.conversationId).lock").path
             let isLocked = isLockHeld(lockPath)
 
-            let lastModified = row.lastModified ?? now
             if !isLocked && now.timeIntervalSince(lastModified) > maxAgeSeconds {
                 continue
             }
@@ -82,36 +85,32 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
 
             let title = !row.title.isEmpty ? row.title : (resolvedCwd.map { ($0 as NSString).lastPathComponent } ?? "Antigravity")
 
-            // Check transcript for waiting states if running
+            // Check transcript for waiting states and response details
             let transcriptURL = brainDir.appendingPathComponent(row.conversationId).appendingPathComponent(".system_generated/logs/transcript.jsonl")
-            var isWaiting = false
-            var waitingDetail: String? = nil
-            var runningDetail: String? = nil
-
-            if fm.fileExists(atPath: transcriptURL.path) {
-                let (waiting, waitText, runText) = inspectTranscript(url: transcriptURL)
-                isWaiting = waiting
-                waitingDetail = waitText
-                runningDetail = runText
-            }
+            let transcriptInfo = fm.fileExists(atPath: transcriptURL.path) ? inspectTranscript(url: transcriptURL) : TranscriptInfo()
 
             var state: SessionState = .idle
             var waitingLabel: String? = nil
             var detail: String? = nil
 
             if row.status == "CASCADE_RUN_STATUS_RUNNING" || row.notFullyIdle {
-                if isWaiting {
+                if transcriptInfo.isWaiting {
                     state = .waitingForUser
                     waitingLabel = "在问你"
-                    detail = waitingDetail ?? "等待用户确认或输入"
+                    detail = transcriptInfo.waitingText ?? "等待用户确认或输入"
                 } else {
                     state = .running
-                    detail = runningDetail ?? "正在思考…"
+                    detail = transcriptInfo.runningText ?? "正在思考…"
                 }
             } else {
                 // CASCADE_RUN_STATUS_IDLE
                 state = .idle
-                detail = !row.preview.isEmpty ? row.preview : nil
+                // If preview equals title or preview is empty, use the last planner response content
+                if !row.preview.isEmpty && row.preview != title {
+                    detail = row.preview
+                } else {
+                    detail = transcriptInfo.lastPlannerText
+                }
             }
 
             let session = AgentSession(
@@ -178,6 +177,22 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
         let dateFormatter = ISO8601DateFormatter()
         dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
 
+        let fallbackFormatterWithFraction: DateFormatter = {
+            let df = DateFormatter()
+            df.locale = Locale(identifier: "en_US_POSIX")
+            df.timeZone = TimeZone(secondsFromGMT: 0)
+            df.dateFormat = "yyyy-MM-dd HH:mm:ss.SSSSSSZZZZZ"
+            return df
+        }()
+
+        let fallbackFormatterSimple: DateFormatter = {
+            let df = DateFormatter()
+            df.locale = Locale(identifier: "en_US_POSIX")
+            df.timeZone = TimeZone(secondsFromGMT: 0)
+            df.dateFormat = "yyyy-MM-dd HH:mm:ss"
+            return df
+        }()
+
         while sqlite3_step(statement) == SQLITE_ROW {
             let convId = String(cString: sqlite3_column_text(statement, 0))
             let title = sqlite3_column_text(statement, 1).map { String(cString: $0) } ?? ""
@@ -191,14 +206,11 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
             if let dateStr = sqlite3_column_text(statement, 7) {
                 let s = String(cString: dateStr)
                 modDate = dateFormatter.date(from: s)
-                if modDate == nil {
-                    // Try fallback standard format "yyyy-MM-dd HH:mm:ss"
-                    let df = DateFormatter()
-                    df.dateFormat = "yyyy-MM-dd HH:mm:ss.SSSSSSZZZZZ"
-                    modDate = df.date(from: s)
-                }
+                    ?? fallbackFormatterWithFraction.date(from: s)
+                    ?? fallbackFormatterSimple.date(from: s)
             }
 
+            // If date parsing fails, modDate remains nil, row will be skipped in scan()
             rows.append(SummaryRow(
                 conversationId: convId,
                 title: title,
@@ -214,53 +226,54 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
         return rows
     }
 
-    private func inspectTranscript(url: URL) -> (isWaiting: Bool, waitingText: String?, runningText: String?) {
-        guard let handle = try? FileHandle(forReadingFrom: url) else {
-            return (false, nil, nil)
-        }
-        defer { try? handle.close() }
+    private struct TranscriptInfo {
+        var isWaiting: Bool = false
+        var waitingText: String? = nil
+        var runningText: String? = nil
+        var lastPlannerText: String? = nil
+    }
 
-        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-        let offset = max(0, size - 16384)
-        guard let _ = try? handle.seek(toOffset: UInt64(offset)) else {
-            return (false, nil, nil)
-        }
-
-        let data = handle.readDataToEndOfFile()
-        guard let content = String(data: data, encoding: .utf8) else {
-            return (false, nil, nil)
+    private func inspectTranscript(url: URL) -> TranscriptInfo {
+        guard let lines = FileUtils.readTailLines(fileURL: url, maxBytes: 32768) else {
+            return TranscriptInfo()
         }
 
-        let lines = content.components(separatedBy: .newlines).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-        guard let lastLine = lines.last,
-              let lineData = lastLine.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else {
-            return (false, nil, nil)
-        }
+        var info = TranscriptInfo()
 
-        let type = json["type"] as? String
-        var waiting = false
-        var waitText: String? = nil
-        var runText: String? = nil
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, let lineData = trimmed.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else {
+                continue
+            }
 
-        if let toolCalls = json["tool_calls"] as? [[String: Any]] {
-            for call in toolCalls {
-                let callName = call["tool_name"] as? String ?? call["name"] as? String ?? ""
-                if callName == "ask_question" || callName == "ask_user_question" {
-                    waiting = true
-                    if let args = call["arguments"] as? [String: Any] ?? call["parameters"] as? [String: Any] {
-                        waitText = args["question"] as? String ?? args["prompt"] as? String
+            let type = json["type"] as? String
+            if type == "PLANNER_RESPONSE" {
+                if let toolCalls = json["tool_calls"] as? [[String: Any]] {
+                    for call in toolCalls {
+                        let callName = call["tool_name"] as? String ?? call["name"] as? String ?? ""
+                        if callName == "ask_question" || callName == "ask_user_question" {
+                            info.isWaiting = true
+                            if let args = call["arguments"] as? [String: Any] ?? call["parameters"] as? [String: Any] {
+                                info.waitingText = args["question"] as? String ?? args["prompt"] as? String
+                            }
+                        } else if !callName.isEmpty {
+                            info.runningText = "正在运行 \(callName)…"
+                        }
                     }
-                } else if !callName.isEmpty {
-                    runText = "正在运行 \(callName)…"
                 }
+                if let content = json["content"] as? String {
+                    let clean = content.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !clean.isEmpty {
+                        info.lastPlannerText = String(clean.prefix(80))
+                    }
+                }
+            } else if type == "USER_INPUT" {
+                // User replied, reset waiting state
+                info.isWaiting = false
             }
         }
 
-        if type == "PLANNER_RESPONSE" && waiting {
-            return (true, waitText, runText)
-        }
-
-        return (false, nil, runText)
+        return info
     }
 }
