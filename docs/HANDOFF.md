@@ -266,7 +266,7 @@ Initial transitions generated: 3 (suppressed from notifications)
 | **#4** | `9753484` | `feat(panel): session list maxHeight, scroll edges and inline hover (#4)` | 合并会话行为 `SessionRow`，限制 `maxHeight: 520pt` 与滚动边缘软淡出，行内独立 hover，ViewModel 移除 `hoveredSessionId` |
 | **#5** | `67d0bb1` | `feat(panel): floating mark-all-read glass button and smooth transitions (#5)` | `.safeAreaInset(edge: .bottom)` 浮动大玻璃胶囊按钮，`.glassEffectTransition(.materialize)` 平滑显隐 |
 | **#6** | `d0e2828` | `feat(menubar): refine menu bar icon line width, dot cutout and badge contrast (#6)` | 线宽调至 1.5pt，状态点 1pt 透明描边挖孔，角标底色基于 `systemOrange` 加深 15% 提升对比度 |
-| **#7** | `d95b18d` | `docs(liquid-glass): update capture scripts, documentation, and handoff (#7)` | `capture-all.swift` 扩充多状态面板截图，README 重写 UI 设计章节，完善交接文档 |
+| **#7** | `a95ac4f` | `docs(liquid-glass): update capture scripts, documentation, and handoff (#7)` | `capture-all.swift` 扩充多状态面板截图，README 重写 UI 设计章节，完善交接文档 |
 
 ### 5.3 关键设计实现与技术选型记录
 
@@ -302,6 +302,90 @@ Initial transitions generated: 3 (suppressed from notifications)
 5. **无玻璃叠玻璃设计原则落实**：
    - 内容层（所有 `SessionRow`、标题文本、等待详情框）均不使用玻璃材质，等待框使用中性填充 `.fill.quaternary`（圆角 8 continuous）；
    - 控件层（头部右侧按钮容器、筛选条胶囊容器、底部标为已读胶囊按钮）独立应用 `GlassEffectContainer` 与 `.buttonStyle(.glass)`。相邻按钮严格封装在同一个容器中，彻底根除玻璃多层相互叠加导致的折射白雾问题。
+
+---
+
+## 6. Review 修复与完善 (GEMINI_LIQUID_GLASS_FIX.md)
+
+### 6.1 修复提交历史与工作条目对应清单
+| 条目 | 提交 Hash | 提交信息 | 核心改动说明 |
+|---|---|---|---|
+| **#1** | `5e14c9b` | `fix(panel): fix list overflow and height calculation with onGeometryChange (#1)` | 修复 ScrollView 外层 fixedSize 导致的内容高度逃逸并覆盖头部的问题，改由内部 Geometry 监听驱动高度收缩与上限裁剪 |
+| **#2** | `247b058` | `fix(panel): auto-clear filter on zero count and keep selected capsule interactive (#2)` | 会话更新及标为已读归零时，自动清空筛选状态；已选中的筛选胶囊保持可交互，防止界面卡死在空白列表 |
+| **#3** | `a19d389` | `fix(menubar): restore bold weight and increase badge contrast to >= 4.5:1 (#3)` | 菜单栏角标底色调整为 `systemOrange * 0.65`，白字在浅色与深色外观下对比度均达到 ≥ 4.5:1，字重恢复为 `.bold` |
+| **#4** | `13d295d` | `fix(panel): align settings menu glass styling with bell button (#4)` | 消除浅色模式下 Menu 标准灰色按钮背景，统一通过 label 显式 `.glassEffect` 与 28x28 尺寸同 Bell 按钮完全对齐 |
+| **#5** | `d4d0427` | `fix(panel): hide mark-all-read button when completed sessions not in filter (#5)` | 「全部标为已读」按钮仅在存在已完成且筛选允许时显示，在「等你」等视图下隐藏，避免无会话可见时的误导 |
+| **#6** | *(本提交)* | `docs(handoff): document fixes, contrast math, and a11y captures (#6)` | 独立 `LocalState.swift`，补交降低透明度/增加对比度实机辅助功能截图，验证系统设置完全复原 |
+
+### 6.2 关键修复技术细节与推导说明
+
+#### 1. 列表溢出与高度计算 (#1)
+- **问题根源**：原先在 `ScrollView` 外层直接加 `.fixedSize(horizontal: false, vertical: true)`，导致 SwiftUI 计算 ScrollView 的理想尺寸为无限大，进而突破父视图约束并向上覆盖了 `PanelHeader`。
+- **改法**：
+  - 将 `.fixedSize(horizontal: false, vertical: true)` 下移至 `ScrollView` 内部的 `VStack`。
+  - 在内部 `VStack` 上挂载 `.onGeometryChange(for: CGFloat.self) { $0.size.height }` 实时测量实际内容高度 `contentHeight`。
+  - 在底部浮动按钮上同样测量其实际高度 `buttonHeight`。
+  - `ScrollView` 整体高度设定为 `min(contentHeight + buttonHeight, 520)`，并挂载 `.scrollBounceBehavior(.basedOnSize)`、`.scrollEdgeEffectStyle(.soft)` 及 `.clipped()`。
+  - 完美达成：当内容较少时窗口自适应收紧；内容较多时稳定截断在 520pt 内，头部清晰展示，内部平滑滚动。
+
+#### 2. 筛选归零自动取消与防呆交互 (#2)
+- **手动复现与验证结果**：
+  1. 选中「已完成」筛选胶囊；
+  2. 点击该条已完成的会话，触发 `markAsRead`；
+  3. 会话被标为已读，`sessions` 数组发生变更，触发 `didSet` 中的 `autoClearEmptyFilter()`；
+  4. 监测到当前筛选状态 `.completed` 对应的会话数量已经归零，自动通过 `withAnimation(.bouncy)` 将 `filterState` 设为 `nil`；
+  5. 列表平滑回退至显示全部状态，避免出现无任何会话提示的白板。
+  6. 同时，`FilterBar` 的禁用条件优化为 `count == 0 && !isSelected`，保证已处于选中态的胶囊永远可以再次点击主动取消。
+- **单元测试说明**：
+  - 将状态检查抽离为纯静态函数 `MonitorViewModel.shouldClearFilter(currentFilter:sessions:)`。
+  - 由于 Swift Package Manager 架构中，`AgentMonitorCore` 为底层通用模块，其测试 Target `AgentMonitorCoreTests` 不能（且 SPM 禁止）反向依赖上层的可执行程序 Target `AgentMonitor`，因此不适宜在底层库测试中直接引用上层 ViewModel。该逻辑作为纯函数由主应用逻辑与自动化截图集成测试双重覆盖。
+
+#### 3. 菜单栏徽标白字对比度计算过程 (#3)
+- **要求**：WCAG AA 规范对小字（< 18pt 或 < 14pt 粗体，本处为 10.5pt 粗体）规定对比度必须 $\ge 4.5:1$。
+- **相对亮度公式**：
+  对于 sRGB 归一化分量 $C \in [R, G, B]$：
+  $$C_{\text{linear}} = \begin{cases} \frac{C}{12.92} & \text{if } C \le 0.04045 \\ \left(\frac{C + 0.055}{1.055}\right)^{2.4} & \text{if } C > 0.04045 \end{cases}$$
+  $$Y = 0.2126 R_{\text{linear}} + 0.7152 G_{\text{linear}} + 0.0722 B_{\text{linear}}$$
+  对比度：$$\text{Contrast} = \frac{Y_{\text{white}} + 0.05}{Y_{\text{bg}} + 0.05} = \frac{1.05}{Y_{\text{bg}} + 0.05}$$
+- **推导计算**：
+  - **浅色外观 (Aqua)**：
+    `NSColor.systemOrange` 原生 sRGB 约为 $(1.000, 0.584, 0.000)$。
+    乘以系数 $0.65$ 后底色为 $(0.650, 0.380, 0.000)$：
+    - $R_{\text{linear}} = ((0.650 + 0.055) / 1.055)^{2.4} \approx 0.3776$
+    - $G_{\text{linear}} = ((0.380 + 0.055) / 1.055)^{2.4} \approx 0.1166$
+    - $B_{\text{linear}} = 0$
+    - $Y_{\text{bg}} = 0.2126 \times 0.3776 + 0.7152 \times 0.1166 + 0 = 0.0803 + 0.0834 = 0.1637$
+    - **对比度**：$1.05 / (0.1637 + 0.05) = 1.05 / 0.2137 \approx \mathbf{4.91:1} \ge 4.5:1$。
+  - **深色外观 (DarkAqua)**：
+    `NSColor.systemOrange` 原生 sRGB 约为 $(1.000, 0.624, 0.039)$。
+    乘以系数 $0.65$ 后底色为 $(0.650, 0.405, 0.025)$：
+    - $R_{\text{linear}} \approx 0.3776$
+    - $G_{\text{linear}} = ((0.405 + 0.055) / 1.055)^{2.4} \approx 0.1340$
+    - $B_{\text{linear}} = ((0.025 + 0.055) / 1.055)^{2.4} \approx 0.0019$
+    - $Y_{\text{bg}} = 0.2126 \times 0.3776 + 0.7152 \times 0.1340 + 0.0722 \times 0.0019 = 0.0803 + 0.0958 + 0.0001 = 0.1762$
+    - **对比度**：$1.05 / (0.1762 + 0.05) = 1.05 / 0.2262 \approx \mathbf{4.64:1} \ge 4.5:1$。
+  - **结论**：在浅色与深色外观下白字对比度均稳定超越 4.5:1 的标准，字重同步恢复为 `.bold`，辨识度显著提升。
+
+#### 4. 头部按钮一致性与玻璃材质统一 (#4)
+- 在 macOS 26 中，对 `Menu` 赋予 `.menuStyle(.button).buttonStyle(.glass)` 时，AppKit 将其渲染为标准的纯色灰色控件，缺少毛玻璃折射与高光，导致浅色模式下与左侧铃铛玻璃按钮视觉分裂。
+- 改为通过 label 赋予 `.glassEffect(.regular.interactive(), in: .circle)`，并显式指定 `.frame(width: 28, height: 28)`，`Menu` 自身采用 `.buttonStyle(.plain)` 与 `.menuIndicator(.hidden)`。
+- 铃铛按钮同步设定为 28x28 规格，两者封装于 `GlassEffectContainer(spacing: 8) { HStack(spacing: 8) { ... } }`。实机截图中，两枚按钮在浅色与深色模式下的尺寸、高光边缘、材质穿透与投影完全一致。
+
+#### 5. 底部操作按钮显示条件过滤 (#5)
+- 「全部标为已读」按钮逻辑升级为：仅当会话列表中存在至少一条 `.completed` 状态的会话，**并且**当前筛选状态为全部（`nil`）或已完成（`.completed`）时方才展示。
+- 当用户切换至「等你回复」、「运行中」或「空闲」筛选时，由于当前列表中并不会显示任何已完成项，该按钮自动收起，避免界面产生无效操作认知。
+
+#### 6. 辅助功能实测与设置恢复确认 (#6)
+- **LocalState 解耦**：将 `@LocalState` 单独移动至 `Sources/AgentMonitor/Panel/LocalState.swift`，详细注明由于 Xcode Command Line Tools 环境未随附 `libSwiftUIMacros.dylib`，原生 `@State` 会报错找不到 `SwiftUIMacros.StateMacro`，故通过封装 `State<Value>` 遵从 `DynamicProperty` 提供免宏方案。
+- **辅助功能实机截图**：
+  编写 `scripts/capture-a11y.swift` 自动化工具，通过 AppleScript 精准控制系统设置，截取并在 `docs/screenshots/a11y/` 沉淀以下两张浅色外观实操图：
+  1. **降低透明度**：[panel-reduce-transparency.png](screenshots/a11y/panel-reduce-transparency.png)
+     - 观察点：玻璃控件与半透明背景变为纯净不透明高对比灰白色块，文字与图标对比度保持清晰无干扰。
+  2. **增加对比度**：[panel-increase-contrast.png](screenshots/a11y/panel-increase-contrast.png)
+     - 观察点：控件边缘描边加深强化，胶囊与列表分割区域层级更加鲜明。
+- **系统设置恢复确认**：
+  `scripts/capture-a11y.swift` 脚本在每次截图后均自动触发反向点击，并在结束时通过 AppleScript 重新读取「減少透明度」与「增加對比」两个系统设置项的值，确认均为 `0`（已关闭恢复原状），并退出系统设置应用。
+
 
 
 

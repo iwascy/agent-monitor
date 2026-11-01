@@ -82,21 +82,3 @@ extension AgentSession {
     }
 }
 
-/// Fallback property wrapper for SwiftUI.State to avoid CLT compiler bug where @State attempts to resolve missing SwiftUIMacros plugin.
-@propertyWrapper
-public struct LocalState<Value>: DynamicProperty {
-    private var state: State<Value>
-
-    public init(wrappedValue: Value) {
-        self.state = State(initialValue: wrappedValue)
-    }
-
-    public var wrappedValue: Value {
-        get { state.wrappedValue }
-        nonmutating set { state.wrappedValue = newValue }
-    }
-
-    public var projectedValue: Binding<Value> {
-        state.projectedValue
-    }
-}
