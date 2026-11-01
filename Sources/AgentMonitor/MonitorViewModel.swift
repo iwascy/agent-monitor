@@ -17,6 +17,43 @@ public final class MonitorViewModel: ObservableObject {
     private let notifier = Notifier.shared
     private var pauseExpiryTimer: DispatchSourceTimer?
 
+    public var highestState: SessionState? {
+        if sessions.contains(where: { $0.state == .waitingForUser }) {
+            return .waitingForUser
+        }
+        if sessions.contains(where: { $0.state == .completed }) {
+            return .completed
+        }
+        if sessions.contains(where: { $0.state == .running }) {
+            return .running
+        }
+        return nil
+    }
+
+    public var waitingCount: Int {
+        sessions.filter { $0.state == .waitingForUser }.count
+    }
+
+    public var effectiveMenuState: (highestState: SessionState?, waitingCount: Int, isPaused: Bool) {
+        if let env = ProcessInfo.processInfo.environment["AGENT_MONITOR_MENU_STATE"]?.lowercased() {
+            switch env {
+            case "idle":
+                return (highestState: nil, waitingCount: 0, isPaused: false)
+            case "running":
+                return (highestState: .running, waitingCount: 0, isPaused: false)
+            case "completed":
+                return (highestState: .completed, waitingCount: 0, isPaused: false)
+            case "waiting":
+                return (highestState: .waitingForUser, waitingCount: 2, isPaused: false)
+            case "paused":
+                return (highestState: .waitingForUser, waitingCount: 0, isPaused: true)
+            default:
+                break
+            }
+        }
+        return (highestState: highestState, waitingCount: waitingCount, isPaused: isNotificationsPaused)
+    }
+
     public init(sessionStore: SessionStore) {
         self.sessionStore = sessionStore
         self.isLaunchAtLogin = SMAppService.mainApp.status == .enabled

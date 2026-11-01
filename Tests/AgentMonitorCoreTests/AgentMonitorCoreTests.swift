@@ -588,4 +588,69 @@ struct AgentMonitorCoreTests {
             Issue.record("Expected running -> idle transition")
         }
     }
+
+    // MARK: - MenuBarIconRenderer Tests
+
+    @Test("MenuBarIconRenderer: sizes and isTemplate across states")
+    func testMenuBarIconRendererStates() {
+        // 1. Idle (no dot, no badge, unpaused)
+        let idleSize = MenuBarIconRenderer.size(highestState: nil, waitingCount: 0, isPaused: false)
+        #expect(idleSize == NSSize(width: 16, height: 16))
+        #expect(MenuBarIconRenderer.isTemplate(highestState: nil, waitingCount: 0) == true)
+        let idleImg = MenuBarIconRenderer.image(highestState: nil, waitingCount: 0, isPaused: false)
+        #expect(idleImg.size == NSSize(width: 16, height: 16))
+        #expect(idleImg.isTemplate == true)
+
+        // 2. Running (blue dot, isTemplate false)
+        let runningSize = MenuBarIconRenderer.size(highestState: .running, waitingCount: 0, isPaused: false)
+        #expect(runningSize == NSSize(width: 16, height: 16))
+        #expect(MenuBarIconRenderer.isTemplate(highestState: .running, waitingCount: 0) == false)
+        let runningImg = MenuBarIconRenderer.image(highestState: .running, waitingCount: 0, isPaused: false)
+        #expect(runningImg.size == NSSize(width: 16, height: 16))
+        #expect(runningImg.isTemplate == false)
+
+        // 3. Completed (green dot, isTemplate false)
+        let doneSize = MenuBarIconRenderer.size(highestState: .completed, waitingCount: 0, isPaused: false)
+        #expect(doneSize == NSSize(width: 16, height: 16))
+        #expect(MenuBarIconRenderer.isTemplate(highestState: .completed, waitingCount: 0) == false)
+        let doneImg = MenuBarIconRenderer.image(highestState: .completed, waitingCount: 0, isPaused: false)
+        #expect(doneImg.size == NSSize(width: 16, height: 16))
+        #expect(doneImg.isTemplate == false)
+
+        // 4. Waiting for user (orange dot, badge 2: 16 + 5 + 16 = 37)
+        let waitSize = MenuBarIconRenderer.size(highestState: .waitingForUser, waitingCount: 2, isPaused: false)
+        #expect(waitSize == NSSize(width: 37, height: 16))
+        #expect(MenuBarIconRenderer.isTemplate(highestState: .waitingForUser, waitingCount: 2) == false)
+        let waitImg = MenuBarIconRenderer.image(highestState: .waitingForUser, waitingCount: 2, isPaused: false)
+        #expect(waitImg.size == NSSize(width: 37, height: 16))
+        #expect(waitImg.isTemplate == false)
+
+        // 5. Waiting for user with two digits (badge 10: badge width 21, 16 + 5 + 21 = 42)
+        let wait10Size = MenuBarIconRenderer.size(highestState: .waitingForUser, waitingCount: 10, isPaused: false)
+        #expect(wait10Size == NSSize(width: 42, height: 16))
+        #expect(MenuBarIconRenderer.isTemplate(highestState: .waitingForUser, waitingCount: 10) == false)
+
+        // 6. Notifications paused with active waiting state (dot, no badge, bell: 16 + 5 + 13 = 34)
+        let pausedSize = MenuBarIconRenderer.size(highestState: .waitingForUser, waitingCount: 0, isPaused: true)
+        #expect(pausedSize == NSSize(width: 34, height: 16))
+        #expect(MenuBarIconRenderer.isTemplate(highestState: .waitingForUser, waitingCount: 0) == false)
+        let pausedImg = MenuBarIconRenderer.image(highestState: .waitingForUser, waitingCount: 0, isPaused: true)
+        #expect(pausedImg.size == NSSize(width: 34, height: 16))
+        #expect(pausedImg.isTemplate == false)
+
+        // 7. Notifications paused with idle state (no dot, no badge: isTemplate true)
+        let pausedIdleSize = MenuBarIconRenderer.size(highestState: nil, waitingCount: 0, isPaused: true)
+        #expect(pausedIdleSize == NSSize(width: 34, height: 16))
+        #expect(MenuBarIconRenderer.isTemplate(highestState: nil, waitingCount: 0) == true)
+        let pausedIdleImg = MenuBarIconRenderer.image(highestState: nil, waitingCount: 0, isPaused: true)
+        #expect(pausedIdleImg.size == NSSize(width: 34, height: 16))
+        #expect(pausedIdleImg.isTemplate == true)
+
+        // 8. Waiting + Paused (16 + 5 + 16 + 5 + 13 = 55)
+        let waitAndPausedSize = MenuBarIconRenderer.size(highestState: .waitingForUser, waitingCount: 2, isPaused: true)
+        #expect(waitAndPausedSize == NSSize(width: 55, height: 16))
+        let waitAndPausedImg = MenuBarIconRenderer.image(highestState: .waitingForUser, waitingCount: 2, isPaused: true)
+        #expect(waitAndPausedImg.size == NSSize(width: 55, height: 16))
+        #expect(waitAndPausedImg.isTemplate == false)
+    }
 }
