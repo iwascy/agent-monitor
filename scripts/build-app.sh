@@ -78,7 +78,7 @@ cat <<'EOF' > "$CONTENTS_DIR/Info.plist"
 EOF
 
 echo "==> Signing application bundle..."
-codesign --force --deep --sign - "$APP_DIR"
+codesign --force --sign - "$APP_DIR"
 
 echo "==> Successfully built: $REPO_ROOT/$APP_DIR"
 echo "To launch: open $REPO_ROOT/$APP_DIR"
