@@ -145,11 +145,17 @@ public struct MenuView: View {
         self.viewModel = viewModel
     }
 
-    private var isDark: Bool {
-        if let env = ProcessInfo.processInfo.environment["AGENT_MONITOR_COLOR_SCHEME"]?.lowercased() {
-            return env == "dark"
+    /// Only set by the screenshot script; normally the panel follows the system appearance.
+    private var forcedColorScheme: ColorScheme? {
+        switch ProcessInfo.processInfo.environment["AGENT_MONITOR_COLOR_SCHEME"]?.lowercased() {
+        case "dark": return .dark
+        case "light": return .light
+        default: return nil
         }
-        return colorScheme == .dark
+    }
+
+    private var isDark: Bool {
+        (forcedColorScheme ?? colorScheme) == .dark
     }
 
     private var palette: Palette {
@@ -166,7 +172,8 @@ public struct MenuView: View {
         .padding(10)
         .frame(width: 384)
         .background(palette.panelBg)
-        .preferredColorScheme(isDark ? .dark : .light)
+        // Passing nil follows the system; forcing a value here would pin the panel to its first appearance
+        .preferredColorScheme(forcedColorScheme)
     }
 
     // MARK: - Header
