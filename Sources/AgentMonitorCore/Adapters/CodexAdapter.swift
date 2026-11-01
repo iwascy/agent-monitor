@@ -174,7 +174,7 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
     }
 
     private func parseRollout(fileURL: URL) -> RolloutSummary? {
-        guard let lines = readTailLines(fileURL: fileURL, maxBytes: 65536) else {
+        guard let lines = FileUtils.readTailLines(fileURL: fileURL, maxBytes: 65536) else {
             return nil
         }
 
@@ -284,23 +284,5 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
         return summary
     }
 
-    private func readTailLines(fileURL: URL, maxBytes: Int) -> [String]? {
-        guard let fileHandle = try? FileHandle(forReadingFrom: fileURL) else {
-            return nil
-        }
-        defer { try? fileHandle.close() }
 
-        let fileSize = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-        let offset = max(0, fileSize - maxBytes)
-        do {
-            try fileHandle.seek(toOffset: UInt64(offset))
-            let data = fileHandle.readDataToEndOfFile()
-            guard let content = String(data: data, encoding: .utf8) else {
-                return nil
-            }
-            return content.components(separatedBy: .newlines)
-        } catch {
-            return nil
-        }
-    }
 }

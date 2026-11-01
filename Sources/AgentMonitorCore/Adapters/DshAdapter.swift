@@ -192,7 +192,7 @@ public final class DshAdapter: AgentAdapter, @unchecked Sendable {
         if fileURL.pathExtension == "zstd" {
             lines = decompressZstdTail(fileURL: fileURL)
         } else {
-            lines = readUncompressedTail(fileURL: fileURL)
+            lines = FileUtils.readTailLines(fileURL: fileURL, maxBytes: 65536) ?? []
         }
 
         guard !lines.isEmpty else { return nil }
@@ -326,19 +326,5 @@ public final class DshAdapter: AgentAdapter, @unchecked Sendable {
         }
     }
 
-    private func readUncompressedTail(fileURL: URL) -> [String] {
-        guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return [] }
-        defer { try? handle.close() }
 
-        let size = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-        let offset = max(0, size - 65536)
-        do {
-            try handle.seek(toOffset: UInt64(offset))
-            let data = handle.readDataToEndOfFile()
-            guard let content = String(data: data, encoding: .utf8) else { return [] }
-            return content.components(separatedBy: .newlines)
-        } catch {
-            return []
-        }
-    }
 }
