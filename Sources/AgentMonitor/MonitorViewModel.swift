@@ -119,8 +119,11 @@ public final class MonitorViewModel: ObservableObject {
 
         sessionStore.onSessionsUpdated = { [weak self] updated in
             Task { @MainActor in
-                self?.sessions = updated
-                self?.checkPauseExpiry()
+                guard let self = self else { return }
+                if self.sessions != updated {
+                    self.sessions = updated
+                }
+                self.checkPauseExpiry()
             }
         }
 
@@ -350,6 +353,14 @@ public final class MonitorViewModel: ObservableObject {
             timer.resume()
             self.pauseExpiryTimer = timer
         }
+    }
+
+    public func onPanelAppear() {
+        sessionStore.isPanelVisible = true
+    }
+
+    public func onPanelDisappear() {
+        sessionStore.isPanelVisible = false
     }
 
     public func setLaunchAtLogin(_ enable: Bool) {

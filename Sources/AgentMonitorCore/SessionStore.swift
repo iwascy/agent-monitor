@@ -16,11 +16,33 @@ public final class SessionStore: @unchecked Sendable {
     private var isInitialScan = true
     private let lock = NSRecursiveLock()
 
+    private var _isPanelVisible: Bool = false
+    public var isPanelVisible: Bool {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _isPanelVisible
+        }
+        set {
+            lock.lock()
+            let changed = (_isPanelVisible != newValue)
+            _isPanelVisible = newValue
+            lock.unlock()
+
+            if changed {
+                workQueue.async { [weak self] in
+                    self?.handlePanelVisibilityChanged(newValue)
+                }
+            }
+        }
+    }
+
     public var onTransition: (@Sendable (SessionTransition) -> Void)?
     public var onSessionsUpdated: (@Sendable ([AgentSession]) -> Void)?
 
     private var fileWatcher: FileWatcher?
     private var pollingTimer: DispatchSourceTimer?
+    private var liveTimer: DispatchSourceTimer?
     private let workQueue = DispatchQueue(label: "com.agentmonitor.sessionstore", qos: .utility)
 
     public let pollingInterval: TimeInterval
@@ -73,10 +95,49 @@ public final class SessionStore: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
+        _isPanelVisible = false
         fileWatcher?.stop()
         if let timer = pollingTimer {
             timer.cancel()
             pollingTimer = nil
+        }
+        stopLiveTimer()
+    }
+
+    private func handlePanelVisibilityChanged(_ visible: Bool) {
+        if visible {
+            refresh()
+            let updated = currentSessions
+            onSessionsUpdated?(updated)
+            startLiveTimer()
+        } else {
+            stopLiveTimer()
+        }
+    }
+
+    private func startLiveTimer() {
+        stopLiveTimer()
+        let timer = DispatchSource.makeTimerSource(queue: workQueue)
+        timer.schedule(deadline: .now() + 1.0, repeating: 1.0)
+        timer.setEventHandler { [weak self] in
+            guard let self = self else { return }
+            let isVisible: Bool = {
+                self.lock.lock()
+                defer { self.lock.unlock() }
+                return self._isPanelVisible
+            }()
+            if isVisible {
+                self.refresh()
+            }
+        }
+        timer.resume()
+        self.liveTimer = timer
+    }
+
+    private func stopLiveTimer() {
+        if let timer = liveTimer {
+            timer.cancel()
+            liveTimer = nil
         }
     }
 
@@ -153,6 +214,7 @@ public final class SessionStore: @unchecked Sendable {
         }
 
         var transitions: [SessionTransition] = []
+        var hasContentChanges = false
         let now = Date()
 
         // 1. Detect removed sessions (or older than maxAge)
@@ -166,10 +228,12 @@ public final class SessionStore: @unchecked Sendable {
                 if now.timeIntervalSince(fresh.lastActivity) > maxAgeSeconds {
                     sessionCache.removeValue(forKey: id)
                     transitions.append(.removed(id: id))
+                    hasContentChanges = true
                 }
             } else {
                 sessionCache.removeValue(forKey: id)
                 transitions.append(.removed(id: id))
+                hasContentChanges = true
             }
         }
 
@@ -216,6 +280,9 @@ public final class SessionStore: @unchecked Sendable {
                     fresh.stateSince = now
                     transitions.append(.stateChanged(session: fresh, from: existing.state, to: fresh.state))
                 }
+                if existing != fresh {
+                    hasContentChanges = true
+                }
                 sessionCache[id] = fresh
             } else {
                 // First discovery: idle stays idle
@@ -228,11 +295,13 @@ public final class SessionStore: @unchecked Sendable {
                 }
                 sessionCache[id] = fresh
                 transitions.append(.added(fresh))
+                hasContentChanges = true
             }
         }
 
         let isInitial = isInitialScan
         isInitialScan = false
+        let isVisible = _isPanelVisible
 
         if !transitions.isEmpty {
             let updated = currentSessions
@@ -243,6 +312,9 @@ public final class SessionStore: @unchecked Sendable {
                 }
             }
         } else if isInitial {
+            let updated = currentSessions
+            onSessionsUpdated?(updated)
+        } else if isVisible && hasContentChanges {
             let updated = currentSessions
             onSessionsUpdated?(updated)
         }

@@ -14,6 +14,9 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
     public override init() {
         super.init()
+        guard Bundle.main.bundleIdentifier != nil else {
+            return
+        }
         let center = UNUserNotificationCenter.current()
         center.delegate = self
         center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
@@ -134,6 +137,7 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             trigger: nil // immediate delivery
         )
 
+        guard Bundle.main.bundleIdentifier != nil else { return }
         UNUserNotificationCenter.current().add(request) { error in
             if let error = error {
                 NSLog("Failed to deliver notification: %@", error.localizedDescription)

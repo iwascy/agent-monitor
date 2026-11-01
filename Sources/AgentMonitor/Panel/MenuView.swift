@@ -29,5 +29,11 @@ public struct MenuView: View {
         .frame(width: 384)
         .fixedSize(horizontal: false, vertical: true)
         .preferredColorScheme(forcedColorScheme)
+        .onAppear {
+            viewModel.onPanelAppear()
+        }
+        .onDisappear {
+            viewModel.onPanelDisappear()
+        }
     }
 }

@@ -31,4 +31,18 @@ struct MonitorViewModelTests {
         #expect(MonitorViewModel.shouldShowMarkAllAsRead(sessions: withDone, filterState: .waitingForUser) == false)
         #expect(MonitorViewModel.shouldShowMarkAllAsRead(sessions: withoutDone, filterState: nil) == false)
     }
+
+    @Test("Panel appear and disappear toggles SessionStore isPanelVisible")
+    func testPanelVisibilityToggle() {
+        let store = SessionStore(adapters: [])
+        let vm = MonitorViewModel(sessionStore: store)
+
+        #expect(store.isPanelVisible == false)
+
+        vm.onPanelAppear()
+        #expect(store.isPanelVisible == true)
+
+        vm.onPanelDisappear()
+        #expect(store.isPanelVisible == false)
+    }
 }

@@ -275,6 +275,28 @@ struct AgentMonitorCoreTests {
         }
     }
 
+    final class SessionsUpdatedBox: @unchecked Sendable {
+        var callCount = 0
+        var latest: [AgentSession] = []
+        let lock = NSLock()
+        func record(_ sessions: [AgentSession]) {
+            lock.lock()
+            defer { lock.unlock() }
+            callCount += 1
+            latest = sessions
+        }
+        var count: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return callCount
+        }
+        var sessions: [AgentSession] {
+            lock.lock()
+            defer { lock.unlock() }
+            return latest
+        }
+    }
+
     @Test("SessionStore: Diffing transitions and sorting")
     func testSessionStoreTransitionsAndSorting() throws {
         let mock = MockAdapter(kind: .claudeCode)
@@ -588,6 +610,95 @@ struct AgentMonitorCoreTests {
         } else {
             Issue.record("Expected running -> idle transition")
         }
+    }
+
+    @Test("SessionStore: Panel visibility controls session content updates without state transition")
+    func testSessionStorePanelVisibilityControlsContentUpdates() throws {
+        let mock = MockAdapter(kind: .antigravity)
+        let store = SessionStore(adapters: [mock])
+
+        let sessionBox = SessionsUpdatedBox()
+        let transBox = TransitionBox()
+        store.onSessionsUpdated = { updated in
+            sessionBox.record(updated)
+        }
+        store.onTransition = { t in
+            transBox.append(t)
+        }
+
+        // 1. Initial scan: session in running state
+        let initialTime = Date()
+        mock.mockSessions = [
+            AgentSession(
+                id: "antigravity:test-1",
+                kind: .antigravity,
+                title: "Task 1",
+                state: .running,
+                stateSince: initialTime,
+                lastActivity: initialTime,
+                detail: "正在运行 run_command…"
+            )
+        ]
+        _ = store.refresh()
+        #expect(sessionBox.count == 1) // Initial scan calls onSessionsUpdated
+        #expect(sessionBox.sessions.first?.detail == "正在运行 run_command…")
+
+        // 2. While panel is hidden (isPanelVisible = false): detail updates should NOT trigger onSessionsUpdated
+        store.isPanelVisible = false
+        mock.mockSessions = [
+            AgentSession(
+                id: "antigravity:test-1",
+                kind: .antigravity,
+                title: "Task 1",
+                state: .running,
+                stateSince: initialTime,
+                lastActivity: initialTime.addingTimeInterval(5),
+                detail: "正在运行 swift test…"
+            )
+        ]
+        let tHidden = store.refresh()
+        #expect(tHidden.isEmpty) // No state transition
+        #expect(sessionBox.count == 1) // count remains 1, NOT updated in background!
+        #expect(transBox.current.isEmpty)
+
+        // 3. When panel becomes visible (isPanelVisible = true): detail updates DO trigger onSessionsUpdated
+        store.isPanelVisible = true
+        mock.mockSessions = [
+            AgentSession(
+                id: "antigravity:test-1",
+                kind: .antigravity,
+                title: "Task 1",
+                state: .running,
+                stateSince: initialTime,
+                lastActivity: initialTime.addingTimeInterval(10),
+                detail: "正在运行 git commit…"
+            )
+        ]
+        let tVisible = store.refresh()
+        #expect(tVisible.isEmpty) // No state transition
+        #expect(sessionBox.count > 1) // onSessionsUpdated WAS called because panel is visible!
+        #expect(sessionBox.sessions.first?.detail == "正在运行 git commit…")
+        #expect(transBox.current.isEmpty) // Still no system notification generated
+
+        // 4. When panel is hidden again, state transition (running -> completed) STILL notifies
+        store.isPanelVisible = false
+        let countBeforeStateChange = sessionBox.count
+        mock.mockSessions = [
+            AgentSession(
+                id: "antigravity:test-1",
+                kind: .antigravity,
+                title: "Task 1",
+                state: .idle,
+                stateSince: initialTime.addingTimeInterval(15),
+                lastActivity: initialTime.addingTimeInterval(15),
+                detail: "全部完成"
+            )
+        ]
+        let tStateChange = store.refresh()
+        #expect(tStateChange.count == 1)
+        #expect(sessionBox.count > countBeforeStateChange) // onSessionsUpdated called for state change!
+        #expect(sessionBox.sessions.first?.state == .completed)
+        #expect(transBox.current.count == 1) // Notification transition posted!
     }
 
     // MARK: - MenuBarIconRenderer Tests
