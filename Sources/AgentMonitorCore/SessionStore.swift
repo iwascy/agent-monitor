@@ -134,11 +134,16 @@ public final class SessionStore: @unchecked Sendable {
         defer { lock.unlock() }
 
         var scannedSessions: [String: AgentSession] = [:]
+        var successfulAdapters: Set<AgentKind> = []
         for adapter in adapters {
-            if let list = try? adapter.scan() {
+            do {
+                let list = try adapter.scan()
                 for item in list {
                     scannedSessions[item.id] = item
                 }
+                successfulAdapters.insert(adapter.kind)
+            } catch {
+                NSLog("Adapter \(adapter.kind) scan failed: \(error)")
             }
         }
 
@@ -146,7 +151,12 @@ public final class SessionStore: @unchecked Sendable {
         let now = Date()
 
         // 1. Detect removed sessions (or older than maxAge)
-        for (id, _) in sessionCache {
+        for (id, existing) in sessionCache {
+            // Retain existing sessions if their adapter failed to scan in this round
+            if !successfulAdapters.contains(existing.kind) {
+                continue
+            }
+
             if let fresh = scannedSessions[id] {
                 if now.timeIntervalSince(fresh.lastActivity) > maxAgeSeconds {
                     sessionCache.removeValue(forKey: id)

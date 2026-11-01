@@ -47,7 +47,8 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
         switch transition {
         case .added(let session):
-            if session.state == .waitingForUser || session.state == .completed {
+            // .added only notifies if state is waitingForUser (avoids false alerts on new/idle sessions)
+            if session.state == .waitingForUser {
                 sendNotification(for: session, previousState: nil)
             }
         case .stateChanged(let session, let fromState, let toState):
