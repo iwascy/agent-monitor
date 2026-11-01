@@ -5,16 +5,21 @@ import AgentMonitorCore
 public final class IconManager {
     public static let shared = IconManager()
 
-    private var cache: [AgentKind: NSImage] = [:]
+    private struct CacheKey: Hashable {
+        let kind: AgentKind
+        let isDark: Bool
+    }
+    private var cache: [CacheKey: NSImage] = [:]
 
     private init() {}
 
     public func icon(for kind: AgentKind, isDark: Bool = false) -> NSImage {
-        if let cached = cache[kind] {
+        let key = CacheKey(kind: kind, isDark: isDark)
+        if let cached = cache[key] {
             return cached
         }
         let image = loadIcon(for: kind, isDark: isDark)
-        cache[kind] = image
+        cache[key] = image
         return image
     }
 
