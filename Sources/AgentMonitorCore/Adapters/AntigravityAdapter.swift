@@ -52,7 +52,7 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
         let now = Date()
 
         // Read conversation_summaries.db safely via SQLite read-only mode
-        let rows = readSummaries(dbURL: summariesDBURL)
+        let rows = try readSummaries(dbURL: summariesDBURL)
         var results: [AgentSession] = []
 
         for row in rows {
@@ -142,36 +142,55 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
         let lastModified: Date?
     }
 
-    private func readSummaries(dbURL: URL) -> [SummaryRow] {
-        var db: OpaquePointer?
-        let uriString = "file:\(dbURL.path)?mode=ro&immutable=0"
-        let flags = SQLITE_OPEN_READONLY | SQLITE_OPEN_URI
+    public struct DatabaseError: Error, CustomStringConvertible {
+        public let description: String
+    }
 
-        var retries = 3
-        while retries > 0 {
-            if sqlite3_open_v2(uriString, &db, flags, nil) == SQLITE_OK {
-                break
-            }
-            retries -= 1
-            usleep(50_000)
+    /// Opens the summaries DB read-only and prepares `query`.
+    /// The DB is in WAL mode. While Antigravity is idle it checkpoints and deletes `-wal`/`-shm`,
+    /// and a `mode=ro` connection then fails with SQLITE_CANTOPEN because it cannot create `-shm`.
+    /// In that case the main file is a complete snapshot, so `immutable=1` is safe.
+    private func openAndPrepare(dbURL: URL, query: String) throws -> (db: OpaquePointer, statement: OpaquePointer) {
+        let walExists = FileManager.default.fileExists(atPath: dbURL.path + "-wal")
+        var uris = ["file:\(dbURL.path)?mode=ro"]
+        if !walExists {
+            uris.append("file:\(dbURL.path)?mode=ro&immutable=1")
         }
 
-        guard let database = db else { return [] }
-        defer { sqlite3_close(database) }
+        var lastError = "unknown"
+        for uri in uris {
+            var db: OpaquePointer?
+            let rc = sqlite3_open_v2(uri, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil)
+            guard rc == SQLITE_OK, let database = db else {
+                lastError = db.map { String(cString: sqlite3_errmsg($0)) } ?? "open failed (\(rc))"
+                sqlite3_close(db)
+                continue
+            }
+            sqlite3_busy_timeout(database, 300)
 
-        sqlite3_busy_timeout(database, 300)
+            var statement: OpaquePointer?
+            if sqlite3_prepare_v2(database, query, -1, &statement, nil) == SQLITE_OK, let stmt = statement {
+                return (database, stmt)
+            }
+            lastError = String(cString: sqlite3_errmsg(database))
+            sqlite3_finalize(statement)
+            sqlite3_close(database)
+        }
+        throw DatabaseError(description: "conversation_summaries.db: \(lastError)")
+    }
 
+    private func readSummaries(dbURL: URL) throws -> [SummaryRow] {
         let query = """
         SELECT conversation_id, title, preview, workspace_uris, status, not_fully_idle, killed, last_modified_time
         FROM conversation_summaries
         ORDER BY last_modified_time DESC
         """
 
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, query, -1, &statement, nil) == SQLITE_OK else {
-            return []
+        let (database, statement) = try openAndPrepare(dbURL: dbURL, query: query)
+        defer {
+            sqlite3_finalize(statement)
+            sqlite3_close(database)
         }
-        defer { sqlite3_finalize(statement) }
 
         var rows: [SummaryRow] = []
         let dateFormatter = ISO8601DateFormatter()
@@ -193,8 +212,11 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
             return df
         }()
 
-        while sqlite3_step(statement) == SQLITE_ROW {
-            let convId = String(cString: sqlite3_column_text(statement, 0))
+        var rc = sqlite3_step(statement)
+        while rc == SQLITE_ROW {
+            defer { rc = sqlite3_step(statement) }
+            guard let idText = sqlite3_column_text(statement, 0) else { continue }
+            let convId = String(cString: idText)
             let title = sqlite3_column_text(statement, 1).map { String(cString: $0) } ?? ""
             let preview = sqlite3_column_text(statement, 2).map { String(cString: $0) } ?? ""
             let wsUris = sqlite3_column_text(statement, 3).map { String(cString: $0) } ?? ""
@@ -221,6 +243,9 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
                 killed: killed,
                 lastModified: modDate
             ))
+        }
+        guard rc == SQLITE_DONE else {
+            throw DatabaseError(description: "conversation_summaries.db: \(String(cString: sqlite3_errmsg(database)))")
         }
 
         return rows

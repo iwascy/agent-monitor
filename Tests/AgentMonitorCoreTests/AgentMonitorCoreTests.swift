@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import SQLite3
 @testable import AgentMonitorCore
 
 @Suite("AgentMonitorCore Tests")
@@ -451,4 +452,50 @@ struct AgentMonitorCoreTests {
         #expect(store.currentSessions.count == 1)
         #expect(store.currentSessions.first?.id == "codex:cx-1")
     }
+
+    // MARK: - Review #2 regressions
+
+    /// Copies the Antigravity fixture to a temp dir and converts the DB to WAL mode.
+    /// Closing the only connection checkpoints and deletes `-wal`/`-shm`, which is exactly
+    /// the on-disk state of a real Antigravity install while it is idle.
+    private func makeIdleWalAntigravityDir() throws -> URL {
+        let fm = FileManager.default
+        let tempDir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.copyItem(at: fixtureURL().appendingPathComponent("Antigravity"), to: tempDir)
+
+        let dbPath = tempDir.appendingPathComponent("conversation_summaries.db").path
+        var db: OpaquePointer?
+        #expect(sqlite3_open(dbPath, &db) == SQLITE_OK)
+        #expect(sqlite3_exec(db, "PRAGMA journal_mode=WAL;", nil, nil, nil) == SQLITE_OK)
+        sqlite3_close(db)
+
+        #expect(!fm.fileExists(atPath: dbPath + "-wal"))
+        #expect(!fm.fileExists(atPath: dbPath + "-shm"))
+        let header = try FileHandle(forReadingFrom: URL(fileURLWithPath: dbPath))
+        try header.seek(toOffset: 18)
+        #expect(header.readData(ofLength: 2) == Data([2, 2]))
+        try header.close()
+        return tempDir
+    }
+
+    @Test("Antigravity: WAL database without -wal/-shm is still readable")
+    func testAntigravityIdleWalDatabase() throws {
+        let baseDir = try makeIdleWalAntigravityDir()
+        let adapter = AntigravityAdapter(baseDirectory: baseDir, isLockHeld: { _ in false }, maxAgeSeconds: 100 * 365 * 86400)
+
+        let sessions = try adapter.scan()
+        #expect(sessions.count == 3)
+    }
+
+    @Test("Antigravity: unreadable database throws so the store keeps previous sessions")
+    func testAntigravityUnreadableDatabaseThrows() throws {
+        let fm = FileManager.default
+        let tempDir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        try Data("not a sqlite database".utf8).write(to: tempDir.appendingPathComponent("conversation_summaries.db"))
+
+        let adapter = AntigravityAdapter(baseDirectory: tempDir, isLockHeld: { _ in false })
+        #expect(throws: (any Error).self) { try adapter.scan() }
+    }
+
 }
