@@ -6,6 +6,10 @@ struct SessionList: View {
     @LocalState private var isIdleHovered = false
     @LocalState private var contentHeight: CGFloat = 0
     @LocalState private var buttonHeight: CGFloat = 46
+    @LocalState private var scrollPosition = ScrollPosition()
+    @LocalState private var scrollMetrics = ScrollMetrics()
+    @LocalState private var isScrolling: Bool = false
+    @LocalState private var hideTimerTask: Task<Void, Never>? = nil
 
     /// Tall enough that a typical handful of sessions fits without scrolling, short enough for a 13" screen
     private let maxListHeight: CGFloat = 600
@@ -106,12 +110,29 @@ struct SessionList: View {
             }
             .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 1)
+            .background(ScrollViewConfigurator())
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { newHeight in
                 contentHeight = newHeight
             }
         }
         .scrollDisabled(!needsScrolling)
-        .scrollIndicators(needsScrolling ? .automatic : .never)
+        .scrollIndicators(.hidden)
+        .scrollPosition($scrollPosition)
+        .onScrollGeometryChange(for: ScrollMetrics.self) { geo in
+            let insets = geo.contentInsets.top + geo.contentInsets.bottom
+            let visible = geo.containerSize.height - insets
+            return ScrollMetrics(
+                offset: geo.contentOffset.y + geo.contentInsets.top,
+                maxOffset: max(0, geo.contentSize.height - visible),
+                visibleHeight: visible,
+                visibleFraction: geo.contentSize.height > 0 ? min(1, visible / geo.contentSize.height) : 1
+            )
+        } action: { old, new in
+            scrollMetrics = new
+            if abs(new.offset - old.offset) > 0.5 {
+                triggerScrollIndicator()
+            }
+        }
         .scrollBounceBehavior(.basedOnSize)
         .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
         // spacing: 0 so the inset equals the measured button height that the frame below adds
@@ -138,6 +159,42 @@ struct SessionList: View {
         .frame(height: contentHeight > 0 ? min(totalContentHeight, maxListHeight) : nil)
         .frame(maxHeight: maxListHeight)
         .clipped()
+        // After clipped() so the thumb can sit in MenuView's side padding instead of over the rows
+        .overlay(alignment: .trailing) {
+            CustomScrollIndicator(
+                metrics: scrollMetrics,
+                bottomInset: showBottomButton ? buttonHeight : 0,
+                isScrolling: isScrolling,
+                onScrollTo: { targetOffset in
+                    triggerScrollIndicator()
+                    scrollPosition.scrollTo(y: targetOffset)
+                }
+            )
+            .offset(x: CustomScrollIndicator.gutterWidth)
+        }
+        .onChange(of: viewModel.isIdleExpanded) { _, _ in
+            triggerScrollIndicator()
+        }
+        .onChange(of: viewModel.filterState) { _, _ in
+            triggerScrollIndicator()
+        }
+    }
+
+    private func triggerScrollIndicator() {
+        guard needsScrolling else {
+            isScrolling = false
+            return
+        }
+        isScrolling = true
+        hideTimerTask?.cancel()
+        hideTimerTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            if !Task.isCancelled {
+                withAnimation(.easeOut(duration: 0.3)) {
+                    isScrolling = false
+                }
+            }
+        }
     }
 
     private func sectionHeader(title: String, dotColor: Color) -> some View {
@@ -150,5 +207,45 @@ struct SessionList: View {
                 .foregroundColor(.secondary)
         }
         .padding(EdgeInsets(top: 6, leading: 8, bottom: 0, trailing: 8))
+    }
+}
+
+private struct ScrollViewConfigurator: NSViewRepresentable {
+    func makeNSView(context: Context) -> ConfiguratorView {
+        ConfiguratorView()
+    }
+    func updateNSView(_ nsView: ConfiguratorView, context: Context) {}
+}
+
+/// Removes the system scroller so CustomScrollIndicator is the only one. With a mouse attached macOS
+/// switches to legacy scrollers, which reserve ~19pt of width and draw a track; hiding alone keeps that width.
+@MainActor
+private final class ConfiguratorView: NSView {
+    private var observation: NSKeyValueObservation?
+    private var styleObserver: NSObjectProtocol?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard window != nil else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let sv = self.enclosingScrollView else { return }
+            Self.removeScroller(sv)
+            self.observation = sv.observe(\.hasVerticalScroller, options: [.new]) { sv, _ in
+                DispatchQueue.main.async { Self.removeScroller(sv) }
+            }
+            self.styleObserver = NotificationCenter.default.addObserver(
+                forName: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil, queue: .main
+            ) { [weak sv] _ in
+                MainActor.assumeIsolated {
+                    if let sv { Self.removeScroller(sv) }
+                }
+            }
+        }
+    }
+
+    private static func removeScroller(_ sv: NSScrollView) {
+        sv.scrollerStyle = .overlay
+        if sv.hasVerticalScroller { sv.hasVerticalScroller = false }
+        if sv.hasHorizontalScroller { sv.hasHorizontalScroller = false }
     }
 }

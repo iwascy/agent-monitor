@@ -160,8 +160,22 @@ report(step: 0, title: "open")
 // MARK: - Steps
 
 for (i, step) in steps.enumerated() {
-    guard let window = panelWindow(),
-          let button = find(window, where: { attr($0, kAXRoleAttribute) as? String == kAXButtonRole && label($0).hasSuffix(step) }) else {
+    guard let window = panelWindow() else {
+        print("[\(i + 1)] \"\(step)\": window not found")
+        continue
+    }
+    if step.hasPrefix("scroll") {
+        let f = frame(window)
+        let center = CGPoint(x: f.midX, y: f.midY)
+        let delta: Int32 = step == "scroll:up" ? 8 : -8
+        let scrollEvent = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: delta, wheel2: 0, wheel3: 0)
+        scrollEvent?.location = center
+        scrollEvent?.post(tap: .cghidEventTap)
+        Thread.sleep(forTimeInterval: 0.3)
+        report(step: i + 1, title: step)
+        continue
+    }
+    guard let button = find(window, where: { attr($0, kAXRoleAttribute) as? String == kAXButtonRole && label($0).hasSuffix(step) }) else {
         print("[\(i + 1)] press \"\(step)\": no button found")
         continue
     }
