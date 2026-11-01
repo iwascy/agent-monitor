@@ -242,13 +242,18 @@ struct AgentMonitorCoreTests {
         let kind: AgentKind
         let watchPaths: [URL] = []
         var mockSessions: [AgentSession] = []
+        var shouldThrow: Bool = false
 
         init(kind: AgentKind) {
             self.kind = kind
         }
 
         func scan() throws -> [AgentSession] {
-            mockSessions
+            if shouldThrow {
+                struct MockScanError: Error {}
+                throw MockScanError()
+            }
+            return mockSessions
         }
     }
 
@@ -319,5 +324,130 @@ struct AgentMonitorCoreTests {
         let afterRead = store.currentSessions
         let s1After = try #require(afterRead.first(where: { $0.id == "claudeCode:s1" }))
         #expect(s1After.state == .idle)
+    }
+
+    @Test("SessionStore: Initial scan does not promote idle sessions to completed")
+    func testSessionStoreInitialScanDoesNotPromoteToCompleted() throws {
+        let mock = MockAdapter(kind: .claudeCode)
+        // Session reported as idle on first scan
+        let s1 = AgentSession(id: "claudeCode:s1", kind: .claudeCode, title: "Session 1", state: .idle)
+        mock.mockSessions = [s1]
+
+        let store = SessionStore(adapters: [mock])
+        let box = TransitionBox()
+        store.onTransition = { box.append($0) }
+
+        _ = store.refresh()
+
+        // Verify session remains idle
+        let sessions = store.currentSessions
+        #expect(sessions.count == 1)
+        #expect(sessions.first?.state == .idle)
+        // Verify initial scan does not dispatch transitions to notifications
+        #expect(box.current.isEmpty)
+    }
+
+    @Test("SessionStore: Running transitions to idle promoted to completed with duration")
+    func testSessionStoreRunningToIdlePromotion() throws {
+        let mock = MockAdapter(kind: .antigravity)
+        let store = SessionStore(adapters: [mock])
+
+        let startTime = Date().addingTimeInterval(-25) // started 25 seconds ago
+        let runningSession = AgentSession(
+            id: "antigravity:ag-1",
+            kind: .antigravity,
+            title: "Task 1",
+            state: .running,
+            stateSince: startTime,
+            lastActivity: startTime
+        )
+        mock.mockSessions = [runningSession]
+        _ = store.refresh()
+
+        #expect(store.currentSessions.first?.state == .running)
+
+        // Second scan: agent becomes idle
+        let idleSession = AgentSession(
+            id: "antigravity:ag-1",
+            kind: .antigravity,
+            title: "Task 1",
+            state: .idle,
+            stateSince: Date(),
+            lastActivity: Date()
+        )
+        mock.mockSessions = [idleSession]
+        let transitions = store.refresh()
+
+        let updated = try #require(store.currentSessions.first)
+        #expect(updated.state == .completed)
+        #expect(updated.completedDuration != nil)
+        #expect((updated.completedDuration ?? 0) >= 20.0)
+
+        // Verify stateChanged transition generated
+        let change = try #require(transitions.first)
+        if case .stateChanged(let s, let from, let to) = change {
+            #expect(s.id == "antigravity:ag-1")
+            #expect(from == .running)
+            #expect(to == .completed)
+        } else {
+            Issue.record("Expected stateChanged transition")
+        }
+    }
+
+    @Test("SessionStore: Marked as read session does not revert to completed on lastActivity change")
+    func testSessionStoreMarkedAsReadDoesNotRevertOnActivityChange() throws {
+        let mock = MockAdapter(kind: .dsh)
+        let store = SessionStore(adapters: [mock])
+
+        // 1. Initial running
+        let s = AgentSession(id: "dsh:d1", kind: .dsh, title: "DSH Work", state: .running)
+        mock.mockSessions = [s]
+        _ = store.refresh()
+
+        // 2. Becomes idle -> promoted to completed
+        let sIdle = AgentSession(id: "dsh:d1", kind: .dsh, title: "DSH Work", state: .idle)
+        mock.mockSessions = [sIdle]
+        _ = store.refresh()
+        #expect(store.currentSessions.first?.state == .completed)
+
+        // 3. Mark as read -> becomes idle
+        store.markAsRead(id: "dsh:d1")
+        #expect(store.currentSessions.first?.state == .idle)
+
+        // 4. Subsequent scan where file mtime/lastActivity is updated, but still reported idle
+        let updatedTime = Date().addingTimeInterval(30)
+        let sStillIdle = AgentSession(
+            id: "dsh:d1",
+            kind: .dsh,
+            title: "DSH Work",
+            state: .idle,
+            stateSince: updatedTime,
+            lastActivity: updatedTime
+        )
+        mock.mockSessions = [sStillIdle]
+        _ = store.refresh()
+
+        // MUST stay idle!
+        let finalSessions = store.currentSessions
+        #expect(finalSessions.first?.state == .idle)
+    }
+
+    @Test("SessionStore: Retains sessions when adapter scan throws error")
+    func testSessionStoreRetainsSessionsWhenAdapterFails() throws {
+        let mock = MockAdapter(kind: .codex)
+        let store = SessionStore(adapters: [mock])
+
+        let s = AgentSession(id: "codex:cx-1", kind: .codex, title: "Codex Thread", state: .running)
+        mock.mockSessions = [s]
+        _ = store.refresh()
+        #expect(store.currentSessions.count == 1)
+
+        // Subsequent scan fails
+        mock.shouldThrow = true
+        _ = store.refresh()
+
+        // Session must be retained!
+        #expect(store.currentSessions.count == 1)
+        #expect(store.currentSessions.first?.id == "codex:cx-1")
     }
 }
