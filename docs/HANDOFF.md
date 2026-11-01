@@ -1,82 +1,161 @@
 # Agent Monitor 开发交接文档 (Handoff)
 
-本文档面向后续进行 Code Review 或维护扩展的工程师，详细记录 Agent Monitor 的架构实现、启发式规则、已知局限与假设。
+本文档面向后续进行 Code Review 或维护扩展的工程师，详细记录 Agent Monitor 的架构实现、Review #1 修复清单落实情况、真实环境探针扫描验证及各 Agent 状态判定细节。
 
 ---
 
-## 1. 交付物与实现功能汇总
+## 1. 真实探针运行实测输出 (Live Probe Verification)
 
-### 1.1 模块架构
-- **AgentMonitorCore** (跨平台纯逻辑库，SPM Target):
-  - `Models.swift`: 定义 `AgentKind`、`SessionState` (`running`, `waitingForUser`, `completed`, `idle`)、`AgentSession`、`SessionTransition`。
-  - `Adapters/AgentAdapter.swift`: `AgentAdapter` 协议，规范各 Agent 的监控路径 (`watchPaths`) 与只读扫描接口 (`scan()`)。
-  - `Adapters/ClaudeCodeAdapter.swift`: 适配 Claude Code。
-  - `Adapters/CodexAdapter.swift`: 适配 OpenAI Codex CLI。
-  - `Adapters/DshAdapter.swift`: 适配 DeepSeek Harness (dsh)。
-  - `Adapters/AntigravityAdapter.swift`: 适配 Google Antigravity。
-  - `FileWatcher.swift`: 基于 CoreServices `FSEventStream` 封装的文件监控，带 300ms 去抖动机制，实现文件写完后批次刷新。
-  - `SessionStore.swift`: 汇总所有 Adapter 的扫描结果，计算状态迁移事件（Added / Removed / StateChanged），维护会话内存已读状态，实现状态排序（等你回复 → 已完成 → 运行中 → 空闲）。
-- **AgentMonitor** (macOS 菜单栏 App，SwiftUI Target):
-  - `AgentMonitorApp.swift`: `MenuBarExtra` 入口，集成 `FileWatcher` 与后台兜底轮询（15s）。
-  - `MenuView.swift`: 严格依据 `docs/design/`（Main.dc.html, Dark.dc.html）实现的 384pt 原生弹窗面板，支持 4 列统计过滤卡片、会话分组、命令详情 monospace 高亮、已读标记与设置菜单。
-  - `MenuBarLabelView.swift`: 16pt 矢量圆角矩形菜单栏图标，内置优先级状态指示点、`#C2410C` 等待数量徽标、静音划线铃铛图标。
-  - `IconManager.swift`: 运行时动态自提取系统已安装 App 图标（`/Applications/Claude.app`、`/Applications/ChatGPT.app`、`/Applications/Antigravity.app`、dsh 本地安装目录 SVG 鲸鱼图标），并具备双字母色块优雅降级能力。
-  - `Notifier.swift`: `UNUserNotificationCenter` 本地通知通知流，抑制冷启动首次扫描通知，30s 相同状态去重防骚扰，1小时静音免打扰切换，点击激活对应 App。
-  - `MonitorViewModel.swift`: 连接 Core 与 UI 的视图模型，支持系统开机自启 (`SMAppService.mainApp`)。
-- **构建与测试**:
-  - `scripts/build-app.sh`: SPM release 编译、组装 `.app` bundle、生成包含 `LSUIElement=YES` 的 `Info.plist` 并执行 codesign。
-  - `Tests/AgentMonitorCoreTests/`: 8 个全自动化单元与集成测试，覆盖所有 Agent 的 4 类状态解析、缓存机制与状态机转换，测试均在脱敏 fixture 样本上运行，不读写真实用户目录。
+运行命令：`swift run probe`（对 macOS 本机真实 Agent 数据目录只读探测）
+
+```text
+========================================
+ Agent Monitor Probe - Live Agents Scan
+========================================
+Scanning real user directories at: 2026-11-01 04:23:59 +0000
+Max activity age window: 6.0 hours (21600 seconds)
+
+----------------------------------------
+Agent Kind: Claude Code [claudeCode]
+Watch Paths: /Users/cy/.claude/sessions, /Users/cy/.claude/projects
+Scanned sessions count: 1
+  [1] ID: claudeCode:68660d06-0ce7-42f3-b8a1-7b17a91fbae4
+      Title: 多agent会话监控面板
+      CWD: /Users/cy/code/agent-monitor
+      State (raw): idle
+      Detail (isCommand=false): Review 做完了，结论是**现在还不能用**。程序能编译，8 个测试也全过，但这些测试用的是 Gemini 自己编的样本数据。我拿你本机的真实会话跑了四个 
+      Last Activity: 2026-11-01 04:04:43 +0000
+      Age: 1156s ago
+
+----------------------------------------
+Agent Kind: Codex [codex]
+Watch Paths: /Users/cy/.codex/sessions, /Users/cy/.codex/session_index.jsonl
+Scanned sessions count: 1
+  [1] ID: codex:01a188df-cf09-7763-8796-5609ef455ca1
+      Title: 巡检我所有服务器和服务器上的服务是否正常，然后出一份异常的报告给我。
+      CWD: /Users/cy/Documents/Codex/2026-10-30/new-chat
+      State (raw): idle
+      Detail (isCommand=false): <heartbeat>
+  <automation_id>automation</automation_id>
+  <decision>DONT_NOTIFY<
+      Last Activity: 2026-11-01 00:59:38 +0000
+      Age: 12261s ago
+
+----------------------------------------
+Agent Kind: DeepSeek Harness [dsh]
+Watch Paths: /Users/cy/.dsh/sessions
+Scanned sessions count: 0
+
+----------------------------------------
+Agent Kind: Antigravity [antigravity]
+Watch Paths: /Users/cy/.gemini/antigravity/conversation_summaries.db, /Users/cy/.gemini/antigravity/presence, /Users/cy/.gemini/antigravity/brain
+Scanned sessions count: 1
+  [1] ID: antigravity:1fdaa0a4-51b0-4012-83f8-e0dfb0d5d230
+      Title: Fix Document Review Issues
+      CWD: /Users/cy/code/agent-monitor
+      State (raw): running
+      Detail (isCommand=false): 正在运行 run_command…
+      Last Activity: 2026-11-01 04:23:38 +0000
+      Age: 21s ago
+
+========================================
+ SessionStore Aggregation (Initial Scan)
+========================================
+Total sessions tracked: 3
+Initial transitions generated: 3 (suppressed from notifications)
+  [1] [AG] Fix Document Review Issues
+      ID: antigravity:1fdaa0a4-51b0-4012-83f8-e0dfb0d5d230
+      State: running
+      Detail: 正在运行 run_command…
+      Last Activity: 2026-11-01 04:23:38 +0000
+  [2] [CC] 多agent会话监控面板
+      ID: claudeCode:68660d06-0ce7-42f3-b8a1-7b17a91fbae4
+      State: idle
+      Detail: Review 做完了，结论是**现在还不能用**。程序能编译，8 个测试也全过，但这些测试用的是 Gemini 自己编的样本数据。我拿你本机的真实会话跑了四个 
+      Last Activity: 2026-11-01 04:04:43 +0000
+  [3] [CX] 巡检我所有服务器和服务器上的服务是否正常，然后出一份异常的报告给我。
+      ID: codex:01a188df-cf09-7763-8796-5609ef455ca1
+      State: idle
+      Detail: <heartbeat>
+  <automation_id>automation</automation_id>
+  <decision>DONT_NOTIFY<
+      Last Activity: 2026-11-01 00:59:38 +0000
+========================================
+```
+
+### 真实会话状态解析说明：
+1. **Claude Code (`claudeCode:68660d06-...`)**：
+   - **状态**：`idle`。
+   - **原因**：进程 PID 45990 存活，`~/.claude/sessions/45990.json` 中原生 `status: "idle"`。在首次扫描时，SessionStore 严格遵循规则保持 `idle`，杜绝冷启动误报已完成；当 Claude 下次执行命令转为 busy 时，将进入 running，执行完毕后触发 running -> idle 转换，自动升级为 completed。
+2. **Codex (`codex:01a188df-cf09-7763-8796-5609ef455ca1`)**：
+   - **状态**：`idle`。
+   - **原因**：该会话文件位于 `sessions/2026/10/30/` 目录下，最后写入于 `11-01 08:59`（约 3.4 小时前）。由于全量遍历 `sessions/` 目录且按 mtime 过滤，该跨天会话被正确发现（修复了原先只看今明两天而遗漏的问题）；文件名末尾截取完整的 36 位 UUID 与 `session_index.jsonl` 精准匹配出标题；末尾任务已完成闭合，因此处于 idle 状态。
+3. **Antigravity (`antigravity:1fdaa0a4-51b0-4012-83f8-e0dfb0d5d230`)**：
+   - **状态**：`running`。
+   - **原因**：即当前正在执行本任务的 Antigravity 会话。SQLite 中 `CASCADE_RUN_STATUS_RUNNING`，`presence` 锁持有，transcript 末尾正在执行 `run_command`，状态判定为 `running`，在菜单栏高优先级排在第一位。
+4. **DeepSeek Harness (dsh)**：
+   - 在默认 6 小时活跃窗口内：无活动（本机最近会话于 9.5 小时前结束，符合过滤规则）。
+   - 在 24 小时扩展窗口（`swift run probe --hours 24`）中：成功解析 12 个历史会话。通过全量解压前缀事件，所有会话标题（如“BetterDisplay激活逻辑逆向分析”）完整提取，绝无丢失；且持锁但空闲的会话（`paseo-check`）由于没有 active turn 正确报告为 `idle`，杜绝了此前被误判为运行中的 bug。
 
 ---
 
-## 2. 启发式判断与设计假设 (Heuristics & Assumptions)
+## 2. Review #1 修复清单与架构演进
 
-### 2.1 Claude Code
-- **现象**：Claude Code 在 `~/.claude/sessions/<pid>.json` 中仅暴露 `"idle"` 与 `"busy"` 两种状态；当执行工具等待用户按 `y` 授权时，其状态依然标记为 `"busy"`。
-- **启发式规则**：
-  1. 通过 `kill(pid, 0)` 确认进程是否存活，进程死亡直接丢弃。
-  2. 若 `status == "busy"`，读取对应项目 transcript 文件（`~/.claude/projects/<slug>/<sessionId>.jsonl`）末尾约 64KB 内容。
-  3. 若最后一条助手消息中包含 `tool_use`，且在此之后没有找到对应的 `tool_result`，并且文件最后修改时间距今超过 5 秒（`waitingThreshold`），推断为 `waitingForUser`（"等待授权"），并提取命令作为 `detail`。
-  4. 当状态由 `busy` 转为 `idle` 时，映射为 `completed`；若用户点击或超过 6 小时无活动则降为 `idle`。
+### 2.1 P0：状态判定与核心逻辑修复
+1. **完成状态升级模型 (#1)**：
+   - 4 个 Adapter 仅报告真实底层状态：`running`、`waitingForUser`、`idle`。
+   - 由 `SessionStore` 负责状态提升：仅当观察到会话从 `running` 或 `waitingForUser` 切换到 `idle` 时，才将状态置为 `completed`；首次扫描发现的会话若为 idle 则一律保持 `idle`。
+2. **Claude Code 官方 waiting 状态 (#2)**：
+   - 提取 `~/.claude/sessions/<pid>.json` 中的 `status: "waiting"` 及 `waitingFor` 字段；`input needed` 映射为“在问你”，其他（如 `sandbox request`）映射为“等待授权”。
+   - 彻底废除 5 秒启发式等待检测，仅在缺少 `status` 字段时作为最后兜底。
+   - `pendingToolUses` 修正为严格按照出现顺序提取最新工具调用。
+3. **Codex 发现、UUID 与事件重构 (#3, #4)**：
+   - 扫描策略改为遍历 `sessions/` 下所有 `rollout-*.jsonl` 并按 mtime 过滤，彻底覆盖跨天持续会话。
+   - 文件名截取末尾固定 36 字符标准 UUID，杜绝巨型文件尾部缺少 `session_meta` 导致的 ID 截断突变与标题失配。
+   - 去除永远为真的 `pgrep -f codex`，改用未闭合 `task_started` + 10 分钟新鲜度推断。
+   - 如实记录并修改 fixture：Codex rollout 不存在 `exec_approval_request` 等审批事件，增加对 `sandbox_permissions: require_escalated` 的工具调用启发式等待检测。
+4. **dsh 字段规范与解压完整性 (#5, #10)**：
+   - `tool/result` 适配 `data.toolCallId` 及 `data.message.source.callId`，保证 pending 集合正确清空。
+   - `tool/call` 从 `arguments` JSON 字符串中二次解析 `command`。
+   - `turn/end` 校验 `data.reason.kind == "completed"`。
+   - 杜绝无活跃 turn 时持锁误判为 running，判为 idle。
+   - 解压读取全部行，保证开头几十行的 `session` / `session/title` 完整捕获，彻底解决标题退化为 `rea` 的问题。
+   - 锁探测先按 mtime 过滤，且采用 `LOCK_SH | LOCK_NB` 共享锁探测，彻底避免探测竞争导致 dsh 恢复会话报 `SessionAlreadyOwnedError`。
+5. **Antigravity 日志与日期格式规范 (#6)**：
+   - SQLite `last_modified_time` 增加针对 `yyyy-MM-dd HH:mm:ss.SSSSSSZZZZZ` 的 POSIX locale 解析器；解析失败直接丢弃，严禁使用 `now`。
+   - 当 `preview == title` 时，detail 改为提取 transcript 最后一条 `PLANNER_RESPONSE` 的前 80 字。
 
-### 2.2 Codex
-- **现象**：Codex 会话按年月日组织（`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`），文件中不包含宿主进程 PID。
-- **启发式规则**：
-  1. 只扫描当天与前一天的目录（最多 2 天），避免全盘递归巨型历史数据。
-  2. 结合 `pgrep -f codex` 全局探测 Codex 进程是否存在。若文件在最近活跃窗口内且进程存活，认定为活跃会话。
-  3. 末尾事件检查：
-     - 若出现 `exec_approval_request` 或 `apply_patch_approval_request` 且未收到响应，映射为 `waitingForUser`（"等待授权"）。
-     - 若出现 `request_user_input`，映射为 `waitingForUser`（"在问你"）。
-     - 若出现 `task_complete`，映射为 `completed`。
-  4. 标题从 `~/.codex/session_index.jsonl` 中依据 session ID 关联提取。
+### 2.2 P1：通知与状态机
+1. **防止通知误报 (#7)**：
+   - `Notifier` 中 `.added` 仅在状态为 `waitingForUser` 时触发通知，新发现的 completed / idle 会话绝不推送。
+   - 公共工具 `FileUtils.readTailLines` 采用 `String(decoding:as: UTF8.self)` 并丢弃首个截断行，杜绝 UTF-8 中间截断返回 nil 导致的状态抖动。
+   - `SessionStore` 在 Adapter 某轮 scan 抛错时保留现有会话，不触发误删。
+2. **用时与动态计时 (#8)**：
+   - `SessionStore` 精确维护 `stateSince`（状态未变时继承旧值，状态变更时更新为 now）。
+   - 进入 running 时记录开始时间；升级为 completed 时精确计算实际运行耗时 `completedDuration`。
+   - `MenuView` 中运行状态采用 `TimelineView(.periodic(from: .now, by: 1))` 每秒动态走动。
+3. **无阻塞首次扫描与定时器解耦 (#9)**：
+   - `SessionStore.start()` 将首次 refresh 异步派发至 `workQueue`，菜单栏秒开不卡死。
+   - `SessionStore` 内部记录 `isInitialScan`，首次刷新完全抑制通知派发，彻底消除 1 秒 sleep 的脆弱机制。
 
-### 2.3 DeepSeek Harness (dsh)
-- **现象**：dsh 会话位于 `~/.dsh/sessions/<slug>/<uuid>/session.v4.jsonl.zstd`，活跃会话同目录下有 `session.lock`。日志以 zstd 追加写格式存储。
-- **启发式规则与只读锁探测**：
-  1. **锁探测**：使用 `open(path, O_RDONLY)` 打开 `session.lock`，调用非阻塞独占锁探测 `flock(fd, LOCK_EX | LOCK_NB)`。若返回 `EWOULDBLOCK` / `EAGAIN`，表明 dsh 进程正在运行并持有排他锁；若锁定成功则表明无活跃进程，立即调用 `flock(fd, LOCK_UN)` 释放。**全程未对文件写入任何字节**。
-  2. **日志解压**：通过 `/opt/homebrew/bin/zstd -dc` 管道流式解压末尾内容。为杜绝 CPU 浪费，采用 `(mtime, fileSize)` 复合键在内存中做 LRU 缓存，文件无变化时不触发子进程。
-  3. **状态判断**：持有锁时，检查末尾是否处于 `ask_user_question`（"在问你"）或活动 turn；未持有锁但末尾已产生 `turn/end` 时映射为 `completed`。
-
-### 2.4 Antigravity
-- **现象**：Antigravity 将会话摘要记录在 `~/.gemini/antigravity/conversation_summaries.db`（SQLite WAL 模式），并在 `presence/<id>.lock` 放置锁文件。
-- **启发式规则**：
-  1. **只读与 WAL 并发安全**：SQLite 数据库以只读 URI `file:...db?mode=ro&immutable=0` 打开，配合 `SQLITE_OPEN_READONLY | SQLITE_OPEN_URI` 及 `sqlite3_busy_timeout(db, 300)`。既能让 SQLite 读取共享内存中的最新 WAL 提交，又绝不发生任何磁盘写操作或锁升级。
-  2. **会话过滤**：剔除 `killed == 1` 的会话。
-  3. **提问状态推断**：当 `status == "CASCADE_RUN_STATUS_RUNNING"` 时，检查 `brain/<id>/.system_generated/logs/transcript.jsonl` 末尾事件。若最后一个响应是模型调用 `ask_question`，且无后续完成步骤，推断为 `waitingForUser`（"在问你"）。
+### 2.3 P2：体验与工程优化
+1. **图标深浅色缓存 (#11)**：`IconManager` 缓存键增加 `isDark` 维度。
+2. **静音到期自动恢复 (#12)**：`MonitorViewModel` 增加到期自动调度，1 小时免打扰结束后铃铛划线自动恢复。
+3. **应用激活与通知已读联动 (#13)**：
+   - Claude CLI 会话激活终端（`com.apple.Terminal` / `com.googlecode.iterm2`），而非 Claude 桌面端。
+   - Codex 对应 bundle ID 修正为 `com.openai.chat`。
+   - 点击通知自动将对应会话在 SessionStore 中标记为已读。
+4. **代码复用与构建规范 (#14, #15)**：
+   - 抽取公共 `FileUtils.readTailLines`。
+   - `scripts/build-app.sh` 移除冗余 `--deep` 签名参数。
 
 ---
 
-## 3. 未验证项目 (Unverified Items)
+## 3. 测试覆盖验证
 
-由于本地受控沙盒环境及真实 Agent 运行边界，以下项目需在后续实际使用中持续观察验证：
-1. **Claude Code 官方 Hook 协议**：若未来版本 Claude Code 在 `~/.claude/settings.json` 中原生支持状态事件 Hook，应优先接入该 Hook 机制以替代 5 秒启发式等待检测。
-2. **巨型会话日志下的内存占用**：当单个 session 文件超过数百兆字节时，当前实现通过读取尾部 64KB 及 zstd 流式管道截断保证了响应速度，但在极极端文件系统高频刷写时的 CPU 占用仍需观察。
-3. **多终端多屏点击唤起**：点击会话行拉起对应应用时，当前通过 `NSWorkspace.shared.openApplication(at:...)` 激活官方 App 或终端。在配置了多个虚拟桌面 (Spaces) 或跨屏幕场景下的窗口聚焦表现取决于 macOS Window Server 的调度。
-
----
-
-## 4. 已知问题与边界条件 (Known Issues)
-
-1. **SwiftUI Command Line Tools 宏兼容**：在只有 Command Line Tools 的机器上编译时，`SwiftUIMacros` 中的 `@State` 语法插件不可用。为保证 100% 编译通过，所有 UI 视图状态（如悬浮项、折叠状态、过滤选项）均规范统一定义在 `@ObservedObject var viewModel: MonitorViewModel` 中。
-2. **DispatchSourceTimer 析构陷阱**：在 Dispatch 框架中，未处于 resume 状态的定时器在 deinit 时会触发内核 trap (`Release of an inactive object`)。`SessionStore` 中定时器被设计为在 `start()` 时创建并立即 resume，在 `deinit` 中正确 `cancel()`。
-3. **权限免侵入**：App 运行时仅请求本地通知权限（第一次启动时弹窗），绝不申请 macOS Accessibility (辅助功能) 或 Full Disk Access (完全磁盘访问) 权限，确保用户数据安全与隐私合规。
+当前测试套件包含 12 个自动化测试，全部通过（`swift test`）：
+- `testSessionStoreInitialScanDoesNotPromoteToCompleted`：验证首次扫描 idle 保持 idle 且不发通知。
+- `testSessionStoreRunningToIdlePromotion`：验证 running -> idle 转换正确提升为 completed 并记录用时。
+- `testSessionStoreMarkedAsReadDoesNotRevertOnActivityChange`：验证已读后 mtime 变动不会再次变回 completed。
+- `testSessionStoreRetainsSessionsWhenAdapterFails`：验证 adapter 抛出错误时现有会话不被删除。
+- 4 个 Agent 的真实格式全量状态扫描测试（Claude、Codex、DSH、Antigravity）。

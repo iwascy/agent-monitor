@@ -137,7 +137,8 @@ struct AgentMonitorCoreTests {
             sessionsDirectory: sessionsDir,
             sessionIndexURL: indexURL,
             isCodexRunning: { true },
-            maxAgeSeconds: 100 * 365 * 86400
+            maxAgeSeconds: 100 * 365 * 86400,
+            activeThreshold: 100 * 365 * 86400
         )
 
         let sessions = try adapter.scan()
