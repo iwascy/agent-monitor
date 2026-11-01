@@ -162,7 +162,7 @@ Initial transitions generated: 3 (suppressed from notifications)
 
 ---
 
-## Review #2 修复（见 docs/REVIEW-2.md）
+## Review #2 修复
 
 - **A. Antigravity 空闲时数据库打不开**：WAL 模式下 `-wal` / `-shm` 被删除后，`mode=ro` 打开失败。现改为失败且无 `-wal` 时用 `immutable=1` 重试；打开或查询失败时抛错，由 `SessionStore` 保留上一轮结果。测试 `Antigravity: WAL database without -wal/-shm is still readable` 复现了真实的空闲状态（把 fixture 转为 WAL 并关闭连接）。真实数据验证：
   - Antigravity 运行中（存在 `-wal`）：probe 扫描到会话；
@@ -177,9 +177,9 @@ Initial transitions generated: 3 (suppressed from notifications)
 
 ---
 
-## 4. UI 修复与设计稿对齐 (GEMINI_FIX_UI.md)
+## 4. UI 修复（第一版设计稿）
 
-依据 `docs/GEMINI_FIX_UI.md` 与 `docs/design/` 原生设计规范（`Main.dc.html`、`Dark.dc.html`、`States.dc.html`），逐项完成了所有 UI 问题修复、单元测试与真机截图比对。
+> 本节描述的是 Liquid Glass 重设计之前的第一版 UI。面板部分已被第 5 节取代，菜单栏图标和通知的实现仍然有效（颜色以第 5～7 节为准）。
 
 ### 4.1 修复清单落实
 
@@ -203,37 +203,20 @@ Initial transitions generated: 3 (suppressed from notifications)
      - **正文**：去除 Markdown 超链接保留文本（`[text](url)` -> `text`）、反引号、粗体星号、代码块与 `#` 标题符号，合并空白并截断至 120 字。
      - **分组**：设置 `threadIdentifier = session.id`，实现会话聚合。
 
-4. **#4 面板逐项对齐设计稿 (P1)**:
-   - **双层背景消除**：移除 `MenuView` 内部与 `MenuBarExtra(.window)` 窗口冲突的多余 `clipShape` 与内层阴影边框，统一由系统窗口呈现圆角与材质，内嵌精确毛玻璃色块（浅色 `rgba(248,248,250,0.8)` / 深色 `rgba(38,38,42,0.78)`）。
-   - **集中 Palette 定义**：统一管理 Light / Dark 双套配色，覆盖卡片（已完成 `#1A6E30` / `#5FDC7E`+`#8DE6A2`、空闲 5% / 7% 灰底、等你 `#9A3C05` / `#FFB24D`）、分组标题（`#636366` / `#A1A1A6`，内边距 `6 8 0`）、时间标签（等你基于 `stateSince` 计算耗时且字重 500；已完成带“前”字）。
-   - **细节对齐**：等你框上边距调优为 4pt；已完成行对勾圆点 12pt 内嵌双色对勾；运行中行 7 8 内边距并添加 1.8s 光环扩散脉冲（`PhaseAnimator` 零外部宏依赖）；Agent 图标 34pt 负 2pt 外边距；底部操作按钮 30x28pt 圆角 7pt。
+4. **#4 面板逐项对齐设计稿 (P1)**：已被第 5 节的 Liquid Glass 重设计整体取代（`Palette`、统计卡片、底栏均已删除）。
 
 ---
 
-### 4.2 截图对比与验证
+### 4.2 截图索引
 
-所有截图存放在 `docs/screenshots/` 目录中，在真机 macOS 环境下截取：
+`docs/screenshots/` 中的截图由 `scripts/capture-all.swift` 生成，始终反映当前 UI（第 5～7 节之后）：
 
-#### 1. 菜单栏状态图标（浅色 / 深色）
-| 状态 | 浅色菜单栏 | 深色菜单栏 | 规格核对 |
-|---|---|---|---|
-| **无活动** | ![idle-light](screenshots/menubar-idle-light.png) | ![idle-dark](screenshots/menubar-idle-dark.png) | 16pt 单色圆角矩形与两条横线，`isTemplate=true` 随系统着色 |
-| **运行中** | ![running-light](screenshots/menubar-running-light.png) | ![running-dark](screenshots/menubar-running-dark.png) | 右上角 5.4pt 蓝点 (`#0A84FF`)，`isTemplate=false`，线条取 `labelColor` |
-| **已完成** | ![completed-light](screenshots/menubar-completed-light.png) | ![completed-dark](screenshots/menubar-completed-dark.png) | 右上角绿点 (`#34C759`) |
-| **等你回复** | ![waiting-light](screenshots/menubar-waiting-light.png) | ![waiting-dark](screenshots/menubar-waiting-dark.png) | 橙点 (`#F0841C`) + 右侧 `#C2410C` 胶囊数字角标（高度 15pt，间距 5pt） |
-| **通知已暂停** | ![paused-light](screenshots/menubar-paused-light.png) | ![paused-dark](screenshots/menubar-paused-dark.png) | 状态点保留，右侧附带 13pt 划线铃铛图标（间距 5pt） |
-
-#### 2. 菜单栏面板对齐
-| 模式 | 实机截图 | 设计稿对照说明 |
-|---|---|---|
-| **浅色面板** | ![panel-light](screenshots/panel-light.png) | 对齐 `Main.dc.html`：384pt 宽度、4 列统计卡片高对比度色值、SF Mono 等宽命令框、运行中蓝点脉冲、30pt 视觉 Agent 图标、底部 30×28pt 操作按钮 |
-| **深色面板** | ![panel-dark](screenshots/panel-dark.png) | 对齐 `Dark.dc.html`：深色卡片对比度保证、0.5pt 分隔线、已完成绿色圆点内嵌 `#0B2E15` 深绿勾、深色模式悬停态及时间标签 |
-
-#### 3. 系统通知横幅
-| 通知类型 | 实机通知横幅截图 | 细节核对 |
-|---|---|---|
-| **等你回复** | ![notification-waiting](screenshots/notification-waiting.png) | 标题“Codex · 重构 Cookie 同步逻辑”、副标题“等待授权”、正文等宽命令“git push --force origin main”、右侧 Codex 官方图标附件 |
-| **已完成** | ![notification-completed](screenshots/notification-completed.png) | 标题“Antigravity · Loon 规则整理”、副标题“已完成 · 用时 6 分 12 秒”、正文摘要、右侧 Antigravity 官方图标附件 |
+| 内容 | 文件 |
+|---|---|
+| 菜单栏图标（无活动 / 运行中 / 已完成 / 等你回复 / 通知已暂停，浅色与深色） | `menubar-<状态>-<light\|dark>.png` |
+| 面板：默认、筛选「等你」、空闲展开、15 条会话、空状态 | `panel[-waiting\|-idle-expanded\|-large\|-empty]-<light\|dark>.png` |
+| 系统通知横幅（手动截取，通知样式未随重设计改变） | `notification-waiting.png`、`notification-completed.png` |
+| 降低透明度 / 增加对比度（`scripts/capture-a11y.swift`） | `a11y/panel-reduce-transparency.png`、`a11y/panel-increase-contrast.png` |
 
 ---
 
@@ -244,7 +227,7 @@ Initial transitions generated: 3 (suppressed from notifications)
 
 ---
 
-## 5. Liquid Glass（液态玻璃）重构小结 (GEMINI_LIQUID_GLASS.md)
+## 5. Liquid Glass（液态玻璃）重构小结
 
 ### 5.1 #1 背景探针与平台升级小结
 - **平台升级**：
@@ -285,6 +268,7 @@ Initial transitions generated: 3 (suppressed from notifications)
      .menuIndicator(.hidden)
      ```
    - 实测在 macOS 26+ 下原生支持该组合，无需额外手动给 label 添加包装层即可呈现完整的圆形液态玻璃按钮与下拉弹出功能。
+   - **已过时**：浅色模式下该写法渲染成灰底圆，与铃铛不一致，第 6 节 #4 改为给 label 手动加 `glassEffect`，第 7 节让铃铛也采用同样写法。
 
 2. **CommandLineTools 下 `@State` 宏插件兼容**：
    - macOS 26 SDK 中引入了 `@attached public macro State() = #externalMacro(module: "SwiftUIMacros", type: "StateMacro")`，而在无 Xcode 完整安装包的独立 Command Line Tools 环境下，缺少 `libSwiftUIMacros.dylib`，会导致直接使用 `@State private var isHovered` 报找不到外部宏错误。
@@ -298,6 +282,7 @@ Initial transitions generated: 3 (suppressed from notifications)
    - 会话列表区域外层设 `ScrollView`，配合 `.fixedSize(horizontal: false, vertical: true)` 与 `.frame(maxHeight: 520)`：
      - 当会话数量较少时（如 1~3 条），面板高度随内容自适应紧凑收缩；
      - 当会话数量较多时（经 16 条大数据量压测验证，`AGENT_MONITOR_MOCK_DATA=large`），整体面板窗口高度稳定锁定在 620pt 上限，不遮挡屏幕，且顶部和底部边缘在滚动时自然应用 `.scrollEdgeEffectStyle(.soft, for: [.top, .bottom])` 柔和渐变过渡。
+   - **已过时**：这一写法实际会让列表溢出、盖住头部，第 6 节 #1 改为测量内容高度，第 7 节把上限调到 600 并修正了 8pt 偏差。
 
 5. **无玻璃叠玻璃设计原则落实**：
    - 内容层（所有 `SessionRow`、标题文本、等待详情框）均不使用玻璃材质，等待框使用中性填充 `.fill.quaternary`（圆角 8 continuous）；
@@ -305,7 +290,7 @@ Initial transitions generated: 3 (suppressed from notifications)
 
 ---
 
-## 6. Review 修复与完善 (GEMINI_LIQUID_GLASS_FIX.md)
+## 6. Review 修复与完善
 
 ### 6.1 修复提交历史与工作条目对应清单
 | 条目 | 提交 Hash | 提交信息 | 核心改动说明 |

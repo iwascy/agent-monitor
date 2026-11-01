@@ -77,17 +77,17 @@ open build/AgentMonitor.app
 - **菜单栏图标**：
   - 16pt Retina 矢量轮廓图标，主图形线宽升级为 **1.5pt**，完美对齐 SF Symbols 在 regular 字重下的视觉比重。
   - 状态指示点改用系统语义色（`systemOrange` 等你回复 / `systemGreen` 已完成 / `systemBlue` 运行中），外圈以 `.clear` 混合模式挖出 1pt 物理级透明间隔圈，在 macOS 透明菜单栏及任意动态壁纸上均清晰分明。
-  - 等待数胶囊角标底色基于 `systemOrange` 计算最佳可读性对比度，搭配 10.5pt `.semibold` 白字。
+  - 等待数胶囊角标底色基于 `systemOrange` 计算最佳可读性对比度，底色为 `systemOrange` 压暗至 0.65 倍，搭配 10.5pt `.bold` 白字，浅色与深色外观下对比度均 ≥ 4.5:1。
   - 静音/暂停期间平滑展示划线铃铛图标。
 - **Liquid Glass 原生面板 (384pt)**：
   - **控件层与内容层分离**：底层会话列表承托于原生系统窗口材质，绝不玻璃叠玻璃；操作与筛选控件作为浮层采用原生液态玻璃材质。
-  - **头部 (PanelHeader)**：左侧标题与会话/Agent 计数竖排；右侧 `GlassEffectContainer` 容纳圆形玻璃按钮组（`.buttonStyle(.glass)`, `.buttonBorderShape(.circle)`），包含免打扰切换与设置菜单（开机启动 Toggle、退出）。
-  - **筛选条 (FilterBar)**：4 枚等宽玻璃胶囊（等你 / 已完成 / 运行中 / 空闲），挂载 `@Namespace` 与 `glassEffectID` 实现平滑融合形变切换动效；选中态注入轻度高光（≤0.18 透明度状态色），0 会话状态自动降至 `.tertiary` 并禁用。
+  - **头部 (PanelHeader)**：左侧标题与会话/Agent 计数竖排；右侧 `GlassEffectContainer` 容纳两枚 28pt 圆形玻璃按钮（label 加 `.glassEffect(.regular.interactive(), in: .circle)`），包含免打扰切换与设置菜单（开机启动 Toggle、退出）。
+  - **筛选条 (FilterBar)**：4 枚等宽玻璃胶囊（等你 / 已完成 / 运行中 / 空闲），挂载 `@Namespace` 与 `glassEffectID` 实现平滑融合形变切换动效；选中态注入轻度高光（≤0.18 透明度状态色），0 会话且未选中的胶囊降至 `.tertiary` 并禁用；当前筛选的会话数归零时自动取消筛选。
   - **会话列表 (SessionList & SessionRow)**：
     - 合并为单一行架构，采用行内独立 `@LocalState` 悬停动效与 12pt continuous 同心圆角；
     - 等你回复命令浅底框采用 `.fill.quaternary` 中性底色，命令单行中间截断；
     - 列表区域限制 `maxHeight: 600pt`，随内容自然收缩，超出时平滑滚动并搭配 `.scrollEdgeEffectStyle(.soft, for: [.top, .bottom])` 柔和淡出边缘。
-  - **底部浮动操作胶囊**：仅在存在未读已完成会话时，通过 `.safeAreaInset(edge: .bottom)` 浮动展示「全部标为已读」大尺寸玻璃胶囊（`.controlSize(.large)`），配合 `.glassEffectTransition(.materialize)` 平滑显隐。
+  - **底部浮动操作胶囊**：仅在存在已完成会话、且筛选为全部或「已完成」时，通过 `.safeAreaInset(edge: .bottom, spacing: 0)` 浮动展示「全部标为已读」大尺寸玻璃胶囊（`.controlSize(.large)`），配合 `.glassEffectTransition(.materialize)` 平滑显隐。
   - **系统语义色适配**：全面废除 Hex 调色盘，原生适配系统深浅色切换、降低透明度与增加对比度辅助功能设置。
 
 ---

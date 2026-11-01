@@ -25,9 +25,8 @@ let masterImage = NSImage(size: masterSize, flipped: true) { _ in
     ctx.fillPath()
     ctx.restoreGState()
 
-    // Inner icon: 16x16 vector scaled to match States.dc.html notification tile
-    // In States.dc.html, tile is 38x38, SVG is 22x22.
-    // So ratio is 22 / 38. In 824 tile, width = 824 * (22/38) = 477.0526 pt.
+    // Inner icon: 16x16 vector filling 22/38 of the tile, the proportion of the original notification-tile design.
+    // In 824 tile, width = 824 * (22/38) = 477.0526 pt.
     let iconBoxSize: CGFloat = 824.0 * (22.0 / 38.0)
     let scale = iconBoxSize / 16.0
     let originX = 100.0 + (824.0 - iconBoxSize) / 2.0
