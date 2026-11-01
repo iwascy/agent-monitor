@@ -26,7 +26,7 @@ struct FilterBar: View {
     private func capsuleButton(state: SessionState, count: Int) -> some View {
         let isSelected = viewModel.filterState == state
         let tint = state.tint
-        let isDisabled = count == 0
+        let isDisabled = count == 0 && !isSelected
 
         return Button(action: {
             withAnimation(.bouncy) {

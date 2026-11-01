@@ -5,12 +5,30 @@ import AgentMonitorCore
 
 @MainActor
 public final class MonitorViewModel: ObservableObject {
-    @Published public private(set) var sessions: [AgentSession] = []
+    @Published public private(set) var sessions: [AgentSession] = [] {
+        didSet {
+            autoClearEmptyFilter()
+        }
+    }
     @Published public private(set) var isNotificationsPaused: Bool = false
     @Published public private(set) var isLaunchAtLogin: Bool = false
 
     @Published public var isIdleExpanded: Bool = false
     @Published public var filterState: SessionState? = nil
+
+    /// Returns true if the active filter has 0 matching sessions and should be cleared.
+    public static func shouldClearFilter(currentFilter: SessionState?, sessions: [AgentSession]) -> Bool {
+        guard let filter = currentFilter else { return false }
+        return !sessions.contains(where: { $0.state == filter })
+    }
+
+    public func autoClearEmptyFilter() {
+        if Self.shouldClearFilter(currentFilter: filterState, sessions: sessions) {
+            withAnimation(.bouncy) {
+                filterState = nil
+            }
+        }
+    }
 
     private let sessionStore: SessionStore
     private let notifier = Notifier.shared
