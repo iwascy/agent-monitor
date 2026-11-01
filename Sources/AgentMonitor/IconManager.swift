@@ -23,6 +23,55 @@ public final class IconManager {
         return image
     }
 
+    public func cachedIconPNGURL(for kind: AgentKind) -> URL? {
+        let fm = FileManager.default
+        let cachesDir = fm.urls(for: .cachesDirectory, in: .userDomainMask).first ?? fm.homeDirectoryForCurrentUser.appendingPathComponent("Library/Caches")
+        let appCachesDir = cachesDir.appendingPathComponent("com.cy.agentmonitor/icons")
+        if !fm.fileExists(atPath: appCachesDir.path) {
+            try? fm.createDirectory(at: appCachesDir, withIntermediateDirectories: true)
+        }
+
+        let fileURL = appCachesDir.appendingPathComponent("\(kind.rawValue).png")
+        if fm.fileExists(atPath: fileURL.path) {
+            return fileURL
+        }
+
+        let img = icon(for: kind, isDark: false)
+        let pixelSize: CGFloat = 256
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: Int(pixelSize),
+            pixelsHigh: Int(pixelSize),
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        ) else { return nil }
+
+        rep.size = NSSize(width: pixelSize, height: pixelSize)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        NSGraphicsContext.current?.imageInterpolation = .high
+        img.draw(
+            in: NSRect(x: 0, y: 0, width: pixelSize, height: pixelSize),
+            from: NSRect(origin: .zero, size: img.size),
+            operation: .copy,
+            fraction: 1.0
+        )
+        NSGraphicsContext.restoreGraphicsState()
+
+        guard let pngData = rep.representation(using: .png, properties: [:]) else { return nil }
+        do {
+            try pngData.write(to: fileURL)
+            return fileURL
+        } catch {
+            return nil
+        }
+    }
+
     private func loadIcon(for kind: AgentKind, isDark: Bool) -> NSImage {
         let ws = NSWorkspace.shared
 

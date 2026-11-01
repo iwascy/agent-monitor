@@ -51,6 +51,12 @@ swift test
 open build/AgentMonitor.app
 ```
 
+> **提示（通知中心图标刷新）**：若系统通知中心缓存了旧的占位图标，可通过以下命令重新向 LaunchServices 注册：
+> ```bash
+> /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f build/AgentMonitor.app
+> ```
+> 随后退出并重新打开 App 即可生效。
+
 ---
 
 ## 各 Agent 状态判定规则

@@ -91,6 +91,17 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             "entrypoint": session.entrypoint ?? ""
         ]
 
+        if let cachedURL = IconManager.shared.cachedIconPNGURL(for: session.kind) {
+            let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("png")
+            do {
+                try FileManager.default.copyItem(at: cachedURL, to: tempURL)
+                let attachment = try UNNotificationAttachment(identifier: "icon-\(session.kind.rawValue)", url: tempURL, options: nil)
+                content.attachments = [attachment]
+            } catch {
+                NSLog("Failed to attach agent icon to notification: %@", error.localizedDescription)
+            }
+        }
+
         let request = UNNotificationRequest(
             identifier: "\(session.id)-\(Int(now.timeIntervalSince1970))",
             content: content,

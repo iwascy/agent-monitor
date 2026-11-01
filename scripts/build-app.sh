@@ -44,6 +44,13 @@ mkdir -p "$RESOURCES_DIR"
 cp "$BIN_PATH" "$MACOS_DIR/AgentMonitor"
 chmod +x "$MACOS_DIR/AgentMonitor"
 
+echo "==> Generating AppIcon.icns..."
+ICONSET_DIR="build/AppIcon.iconset"
+rm -rf "$ICONSET_DIR"
+swift scripts/make-icon.swift "$ICONSET_DIR"
+/usr/bin/iconutil -c icns "$ICONSET_DIR" -o "$RESOURCES_DIR/AppIcon.icns"
+rm -rf "$ICONSET_DIR"
+
 cat <<'EOF' > "$CONTENTS_DIR/Info.plist"
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -53,6 +60,8 @@ cat <<'EOF' > "$CONTENTS_DIR/Info.plist"
     <string>zh_CN</string>
     <key>CFBundleExecutable</key>
     <string>AgentMonitor</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleIdentifier</key>
     <string>com.cy.agentmonitor</string>
     <key>CFBundleInfoDictionaryVersion</key>
