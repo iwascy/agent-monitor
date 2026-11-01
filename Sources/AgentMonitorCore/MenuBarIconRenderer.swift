@@ -8,7 +8,7 @@ public struct MenuBarIconRenderer {
     ) -> NSSize {
         var width: CGFloat = 16.0
         if waitingCount > 0 {
-            let font = NSFont.systemFont(ofSize: 10.5, weight: .semibold)
+            let font = NSFont.systemFont(ofSize: 10.5, weight: .bold)
             let text = "\(waitingCount)" as NSString
             let textSize = text.size(withAttributes: [.font: font])
             let badgeWidth = max(16.0, ceil(textSize.width) + 8.0)
@@ -97,7 +97,7 @@ public struct MenuBarIconRenderer {
             // 2. Draw Badge (if waitingCount > 0)
             if waitingCount > 0 {
                 currentX += 5.0
-                let font = NSFont.systemFont(ofSize: 10.5, weight: .semibold)
+                let font = NSFont.systemFont(ofSize: 10.5, weight: .bold)
                 let text = "\(waitingCount)" as NSString
                 let textSize = text.size(withAttributes: [.font: font])
                 let badgeWidth = max(16.0, ceil(textSize.width) + 8.0)
@@ -106,9 +106,9 @@ public struct MenuBarIconRenderer {
                 ctx.saveGState()
                 let srgbOrange = NSColor.systemOrange.usingColorSpace(.sRGB) ?? NSColor.systemOrange
                 let badgeColor = NSColor(
-                    srgbRed: srgbOrange.redComponent * 0.85,
-                    green: srgbOrange.greenComponent * 0.85,
-                    blue: srgbOrange.blueComponent * 0.85,
+                    srgbRed: srgbOrange.redComponent * 0.65,
+                    green: srgbOrange.greenComponent * 0.65,
+                    blue: srgbOrange.blueComponent * 0.65,
                     alpha: 1.0
                 )
                 ctx.setFillColor(badgeColor.cgColor)
