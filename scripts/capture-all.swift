@@ -141,6 +141,10 @@ for isDark in [false, true] {
             "AGENT_MONITOR_MOCK_DATA": "1",
             "AGENT_MONITOR_IDLE_EXPANDED": "1"
         ]),
+        ("panel-large", [
+            "AGENT_MONITOR_MOCK_DATA": "large",
+            "AGENT_MONITOR_IDLE_EXPANDED": "1"
+        ]),
         ("panel-empty", [
             "AGENT_MONITOR_MOCK_DATA": "empty"
         ])

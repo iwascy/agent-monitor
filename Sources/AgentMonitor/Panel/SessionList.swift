@@ -4,6 +4,13 @@ import AgentMonitorCore
 struct SessionList: View {
     @ObservedObject var viewModel: MonitorViewModel
     @LocalState private var isIdleHovered = false
+    @LocalState private var contentHeight: CGFloat = 0
+    @LocalState private var buttonHeight: CGFloat = 46
+
+    private var showBottomButton: Bool {
+        viewModel.sessions.contains(where: { $0.state == .completed }) &&
+        (viewModel.filterState == nil || viewModel.filterState == .completed)
+    }
 
     var body: some View {
         ScrollView {
@@ -89,10 +96,14 @@ struct SessionList: View {
             }
             .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 1)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { newHeight in
+                contentHeight = newHeight
+            }
         }
+        .scrollBounceBehavior(.basedOnSize)
         .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
         .safeAreaInset(edge: .bottom) {
-            if viewModel.sessions.contains(where: { $0.state == .completed }) {
+            if showBottomButton {
                 Button(action: {
                     withAnimation(.smooth) {
                         viewModel.markAllAsRead()
@@ -105,11 +116,15 @@ struct SessionList: View {
                 .glassEffectTransition(.materialize)
                 .padding(.top, 4)
                 .padding(.bottom, 2)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { newHeight in
+                    buttonHeight = newHeight
+                }
                 .frame(maxWidth: .infinity)
             }
         }
-        .fixedSize(horizontal: false, vertical: true)
+        .frame(height: contentHeight > 0 ? min(contentHeight + (showBottomButton ? buttonHeight : 0), 520) : nil)
         .frame(maxHeight: 520)
+        .clipped()
     }
 
     private func sectionHeader(title: String, dotColor: Color) -> some View {
