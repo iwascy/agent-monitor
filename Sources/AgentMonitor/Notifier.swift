@@ -107,7 +107,7 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         let content = UNMutableNotificationContent()
         content.title = NotificationFormatter.formatTitle(for: session)
         content.subtitle = NotificationFormatter.formatSubtitle(for: session)
-        content.body = NotificationFormatter.cleanBody(session.detail ?? "")
+        content.body = NotificationFormatter.formatBody(for: session)
         content.threadIdentifier = session.id
         content.sound = UNNotificationSound.default
         content.userInfo = [

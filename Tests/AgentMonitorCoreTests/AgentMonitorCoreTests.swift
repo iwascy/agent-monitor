@@ -724,4 +724,24 @@ struct AgentMonitorCoreTests {
         #expect(cleaned.contains("现在还不能用"))
         #expect(cleaned.count <= 120)
     }
+
+    // MARK: - UI review #2 regressions
+
+    @Test("NotificationFormatter: commands are kept verbatim")
+    func testNotificationBodyKeepsCommands() {
+        let session = AgentSession(
+            id: "codex:x", kind: .codex, title: "清理", state: .waitingForUser,
+            detail: "rm *.log && ls *.txt   __init__.py `pwd`", detailIsCommand: true, waitingLabel: "等待授权"
+        )
+        #expect(NotificationFormatter.formatBody(for: session) == "rm *.log && ls *.txt __init__.py `pwd`")
+
+        let prose = AgentSession(id: "cc:x", kind: .claudeCode, title: "t", state: .completed, detail: "**完成**了")
+        #expect(NotificationFormatter.formatBody(for: prose) == "完成了")
+    }
+
+    @Test("NotificationFormatter: link cut off by truncation keeps only its text")
+    func testNotificationBodyTruncatedLink() {
+        let raw = "已创建 [docs/agents.md](file:///Users/cy/code/mac-r"
+        #expect(NotificationFormatter.cleanBody(raw) == "已创建 docs/agents.md")
+    }
 }
