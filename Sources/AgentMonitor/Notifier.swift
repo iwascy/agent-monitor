@@ -151,17 +151,9 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 public func activateApp(for kind: AgentKind, entrypoint: String? = nil, cwd: String? = nil) {
     let ws = NSWorkspace.shared
 
-    // Claude Code CLI sessions should activate terminal instead of Claude Desktop
-    if kind == .claudeCode && entrypoint == "cli" {
-        let terminalIds = ["com.googlecode.iterm2", "com.apple.Terminal"]
-        for tid in terminalIds {
-            if let termURL = ws.urlForApplication(withBundleIdentifier: tid) {
-                let config = NSWorkspace.OpenConfiguration()
-                config.activates = true
-                ws.openApplication(at: termURL, configuration: config, completionHandler: nil)
-                return
-            }
-        }
+    // CLI sessions (Claude Code in a terminal, dsh) live in a terminal, not in a desktop app
+    if (kind == .claudeCode && entrypoint == "cli") || kind == .dsh {
+        activateTerminal()
         return
     }
 
@@ -191,5 +183,36 @@ public func activateApp(for kind: AgentKind, entrypoint: String? = nil, cwd: Str
         let config = NSWorkspace.OpenConfiguration()
         config.activates = true
         ws.openApplication(at: appURL, configuration: config, completionHandler: nil)
+    }
+}
+
+private let terminalBundleIds = [
+    "com.mitchellh.ghostty",
+    "com.googlecode.iterm2",
+    "dev.warp.Warp-Stable",
+    "com.github.wez.wezterm",
+    "net.kovidgoyal.kitty",
+    "org.alacritty",
+    "com.apple.Terminal"
+]
+
+/// Brings the terminal forward: a running one first, otherwise launches the first installed one.
+@MainActor
+private func activateTerminal() {
+    for bundleId in terminalBundleIds {
+        if let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleId).first {
+            app.activate()
+            return
+        }
+    }
+
+    let ws = NSWorkspace.shared
+    for bundleId in terminalBundleIds {
+        if let termURL = ws.urlForApplication(withBundleIdentifier: bundleId) {
+            let config = NSWorkspace.OpenConfiguration()
+            config.activates = true
+            ws.openApplication(at: termURL, configuration: config, completionHandler: nil)
+            return
+        }
     }
 }
