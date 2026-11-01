@@ -8,6 +8,7 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     public static let shared = Notifier()
 
     public var pauseUntil: Date? = nil
+    public var onNotificationClicked: (@Sendable (String) -> Void)?
 
     private var recentNotifications: [String: (state: SessionState, timestamp: Date)] = [:]
 
@@ -86,7 +87,8 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         content.userInfo = [
             "sessionId": session.id,
             "kind": session.kind.rawValue,
-            "cwd": session.cwd ?? ""
+            "cwd": session.cwd ?? "",
+            "entrypoint": session.entrypoint ?? ""
         ]
 
         let request = UNNotificationRequest(
@@ -120,12 +122,17 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
         let userInfo = response.notification.request.content.userInfo
+        let sessionId = userInfo["sessionId"] as? String
         let kindRaw = userInfo["kind"] as? String
+        let entrypoint = userInfo["entrypoint"] as? String
         let cwd = userInfo["cwd"] as? String
 
         Task { @MainActor in
+            if let sid = sessionId {
+                self.onNotificationClicked?(sid)
+            }
             if let kindRaw = kindRaw, let kind = AgentKind(rawValue: kindRaw) {
-                activateApp(for: kind, cwd: cwd)
+                activateApp(for: kind, entrypoint: entrypoint, cwd: cwd)
             }
         }
         completionHandler()
@@ -141,8 +148,23 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 }
 
 @MainActor
-public func activateApp(for kind: AgentKind, cwd: String? = nil) {
+public func activateApp(for kind: AgentKind, entrypoint: String? = nil, cwd: String? = nil) {
     let ws = NSWorkspace.shared
+
+    // Claude Code CLI sessions should activate terminal instead of Claude Desktop
+    if kind == .claudeCode && entrypoint == "cli" {
+        let terminalIds = ["com.googlecode.iterm2", "com.apple.Terminal"]
+        for tid in terminalIds {
+            if let termURL = ws.urlForApplication(withBundleIdentifier: tid) {
+                let config = NSWorkspace.OpenConfiguration()
+                config.activates = true
+                ws.openApplication(at: termURL, configuration: config, completionHandler: nil)
+                return
+            }
+        }
+        return
+    }
+
     if let bundleId = kind.bundleIdentifier.isEmpty ? nil : kind.bundleIdentifier,
        let appURL = ws.urlForApplication(withBundleIdentifier: bundleId) {
         let config = NSWorkspace.OpenConfiguration()

@@ -34,7 +34,7 @@ public enum AgentKind: String, Codable, Sendable, CaseIterable {
     public var bundleIdentifier: String {
         switch self {
         case .claudeCode: return "com.anthropic.claudefordesktop"
-        case .codex: return "com.openai.codex"
+        case .codex: return "com.openai.chat"
         case .dsh: return "com.deepseek.dsh"
         case .antigravity: return "com.google.antigravity"
         }
@@ -53,6 +53,7 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
     public var detailIsCommand: Bool
     public var waitingLabel: String? // "等待授权" 或 "在问你"
     public var completedDuration: TimeInterval?
+    public var entrypoint: String?
 
     public init(
         id: String,
@@ -65,7 +66,8 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
         detail: String? = nil,
         detailIsCommand: Bool = false,
         waitingLabel: String? = nil,
-        completedDuration: TimeInterval? = nil
+        completedDuration: TimeInterval? = nil,
+        entrypoint: String? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -78,5 +80,6 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
         self.detailIsCommand = detailIsCommand
         self.waitingLabel = waitingLabel
         self.completedDuration = completedDuration
+        self.entrypoint = entrypoint
     }
 }

@@ -246,7 +246,7 @@ public struct MenuView: View {
 
         return Button(action: {
             viewModel.markAsRead(id: session.id)
-            activateApp(for: session.kind, cwd: session.cwd)
+            activateApp(for: session.kind, entrypoint: session.entrypoint, cwd: session.cwd)
         }) {
             HStack(alignment: .top, spacing: 10) {
                 // Agent icon (30pt)

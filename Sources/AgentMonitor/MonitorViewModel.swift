@@ -34,6 +34,12 @@ public final class MonitorViewModel: ObservableObject {
             }
         }
 
+        notifier.onNotificationClicked = { [weak self] sessionId in
+            Task { @MainActor in
+                self?.markAsRead(id: sessionId)
+            }
+        }
+
         updatePauseState()
         sessionStore.start()
     }

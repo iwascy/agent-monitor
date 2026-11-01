@@ -167,7 +167,8 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
                 lastActivity: updatedAt,
                 detail: detail,
                 detailIsCommand: detailIsCommand,
-                waitingLabel: waitingLabel
+                waitingLabel: waitingLabel,
+                entrypoint: sessionMeta.entrypoint
             )
             results.append(session)
         }
