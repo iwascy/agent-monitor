@@ -159,3 +159,19 @@ Initial transitions generated: 3 (suppressed from notifications)
 - `testSessionStoreMarkedAsReadDoesNotRevertOnActivityChange`：验证已读后 mtime 变动不会再次变回 completed。
 - `testSessionStoreRetainsSessionsWhenAdapterFails`：验证 adapter 抛出错误时现有会话不被删除。
 - 4 个 Agent 的真实格式全量状态扫描测试（Claude、Codex、DSH、Antigravity）。
+
+---
+
+## Review #2 修复（见 docs/REVIEW-2.md）
+
+- **A. Antigravity 空闲时数据库打不开**：WAL 模式下 `-wal` / `-shm` 被删除后，`mode=ro` 打开失败。现改为失败且无 `-wal` 时用 `immutable=1` 重试；打开或查询失败时抛错，由 `SessionStore` 保留上一轮结果。测试 `Antigravity: WAL database without -wal/-shm is still readable` 复现了真实的空闲状态（把 fixture 转为 WAL 并关闭连接）。真实数据验证：
+  - Antigravity 运行中（存在 `-wal`）：probe 扫描到会话；
+  - 空闲（只复制主库文件，不带 `-wal` / `-shm`）：`mode=ro` 打开失败，修复后能读出 9 个会话，且不会创建任何文件。
+- **B. Codex 定时任务**：最后一条助手消息以 `<heartbeat>` 开头的回合设置 `AgentSession.suppressCompletion`，`SessionStore` 不升级为 completed、不通知。
+- **C. dsh 解压**：宽松 UTF-8 解码，丢弃末尾不完整的一行。
+- **D.**
+  - Codex `.waitingEscalation` 也套用 10 分钟新鲜度上限；
+  - Codex 从文件第一行读取 `session_meta`，补上 cwd 和完整 id；
+  - dsh 中止的回合设置 `suppressCompletion`，detail 刷新为最后一条助手文本；
+  - CLI 会话（Claude `entrypoint == "cli"` 和 dsh）激活终端时，优先激活正在运行的终端（Ghostty / iTerm / Warp / WezTerm / kitty / Alacritty / Terminal），都没运行时才启动第一个已安装的。
+

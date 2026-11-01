@@ -85,10 +85,12 @@
   - `task_started`、`task_complete`、`turn_aborted`、`agent_message`、`user_message`、`token_count`、`item_completed`、`thread_settings_applied`。
   - **重要**：rollout 中**根本不存在** `exec_approval_request`、`apply_patch_approval_request`、`request_user_input` 或 `elicitation_request` 等审批事件。Codex 的等待授权无法从 rollout 原生判断。
 - **启发式等待判定**：
-  - 若最后一个 `function_call` / `custom_tool_call` 的参数中包含 `"sandbox_permissions":"require_escalated"`，且没有对应的 `function_call_output` / `custom_tool_call_output`，且距今超过 5 秒无动静，启发式判定为 **`waitingForUser`**（"等待授权"）。
+  - 若最后一个 `function_call` / `custom_tool_call` 的参数中包含 `"sandbox_permissions":"require_escalated"`，且没有对应的 `function_call_output` / `custom_tool_call_output`，且文件在 10 分钟内有写入，启发式判定为 **`waitingForUser`**（"等待授权"）。**注意**：本机全部 rollout 中，`require_escalated` 只出现在工具定义（`additional_tools`）里，真实 tool call 中一次都没有出现，所以这条规则实际上不会触发。
 - **状态映射**：
   - 若处于未闭合的 `task_started` 且距上次修改在 10 分钟内：判定为 **`running`**。
   - 若出现 `task_complete`、`turn_aborted` 或超时（>10分钟）：Adapter 报告 **`idle`**。
+  - **定时任务（automation）**：每次运行同样是 `task_started` → `task_complete`，最后一条助手消息以 `<heartbeat>` 开头（内含 `<decision>DONT_NOTIFY</decision>` 等）。Adapter 对这类回合设置 `suppressCompletion`，`SessionStore` 不会升级为 completed，也不发通知；detail 置空，不显示原始 XML。
+  - **`session_meta`** 是文件第一行，可能远超尾部 64KB 窗口。Adapter 单独读取第一行取 `session_id` / `cwd`，按文件路径缓存（第一行尚未写完时不缓存）。
 
 ---
 
@@ -110,7 +112,8 @@
 ### 4.3 真实事件类型与字段规范
 - **`tool/result`**：真实字段是 **`data.toolCallId`** 或 **`data.message.source.callId`**（绝无 `data.callId`）。
 - **`tool/call`**：命令并不在 `data.command`，而在 **`data.arguments`**（JSON 字符串）中，需二次反序列化提取 `command`。
-- **`turn/end`**：必须校验 **`data.reason.kind == "completed"`**，区分正常完成与异常中止。
+- **`turn/end`**：必须校验 **`data.reason.kind == "completed"`**，区分正常完成与异常中止。非 `completed`（中止、出错）时设置 `suppressCompletion`，不升级为 completed、不通知；无论哪种结束，detail 都改为最后一条助手文本。
+- **解压容错**：dsh 正在写入时，最后一个 zstd frame 可能不完整，`zstd -dc` 的输出可能停在多字节字符或 JSON 行中间。解码时使用宽松 UTF-8 解码，并丢弃末尾没有换行的那一行。
 - **无活动 turn 防误判**：若会话持有锁但既无活跃 turn 也无等待提问（例如常驻 `--profile paseo`），判定为 **`idle`**，严禁误判为 running。
 
 ---
@@ -119,7 +122,9 @@
 
 ### 5.1 文件路径与结构
 1. **全局对话摘要库**：`~/.gemini/antigravity/conversation_summaries.db` (SQLite)
-   - 以只读 URI `file:...db?mode=ro&immutable=0` 打开，配置 `sqlite3_busy_timeout(db, 300)`。
+   - 数据库是 **WAL 模式**（文件头第 18–19 字节为 `02 02`）。Antigravity 执行任务时存在 `-wal` / `-shm`；空闲时会 checkpoint 并删除这两个文件。此时 `mode=ro` 连接无法创建 `-shm`，打开失败（`SQLITE_CANTOPEN`）。
+   - 打开顺序：先用 `file:...db?mode=ro`；失败且 `-wal` 不存在时，改用 `file:...db?mode=ro&immutable=1`（没有 WAL 时主库文件就是完整快照，可安全只读）。配置 `sqlite3_busy_timeout(db, 300)`。
+   - 打开、查询失败时 adapter **抛错**，`SessionStore` 保留上一轮结果，不移除会话。
    - **时间格式规范**：`last_modified_time` 真实格式为 `2026-10-31 21:25:25.830068+00:00`。DateFormatter 必须配置 `locale = Locale(identifier: "en_US_POSIX")` 及 UTC 时区。解析失败时直接跳过会话，严禁使用 `Date()` 导致会话永不过期。
 2. **会话日志**：`~/.gemini/antigravity/brain/<id>/.system_generated/logs/transcript.jsonl`
    - 当 `preview == title` 或 preview 为空时，从日志末尾提取最后一条 `PLANNER_RESPONSE` 的 `content` 前 80 字作为详情，避免标题重复显示。
@@ -132,6 +137,6 @@
 ---
 
 ## 6. 启发式与未验证状态汇总说明
-1. **Codex 等待授权**：由于 rollout 无 approval/input 事件，当前仅针对带有 `sandbox_permissions: require_escalated` 的工具调用做启发式推断。
+1. **Codex 等待授权：目前无法识别**。rollout 里没有 approval/input 事件；`require_escalated` 启发式在本机数据中从未命中，仅作保留。
 2. **UTF-8 边界容错**：tail 读取文件时，必须丢弃第一个 `\n` 之前的截断片段，并使用 `String(decoding:as: UTF8.self)`，杜绝解码 nil 导致的会话抖动。
 3. **SessionStore 升级法则**：只有在观察到会话从 `running` 或 `waitingForUser` 切换到 `idle` 时才晋升为 `completed`；首次扫描一律保持 `idle`。
