@@ -184,7 +184,9 @@ public final class SessionStore: @unchecked Sendable {
                 if fresh.state == .idle {
                     let readKey = "\(fresh.id):\(Int64(fresh.lastActivity.timeIntervalSince1970))"
                     if existing.state == .running || existing.state == .waitingForUser {
-                        if !readCompletedKeys.contains(readKey) {
+                        if fresh.suppressCompletion {
+                            runningStartTimes.removeValue(forKey: id)
+                        } else if !readCompletedKeys.contains(readKey) {
                             fresh.state = .completed
                             let startTime = runningStartTimes[id] ?? existing.stateSince
                             let duration = max(1.0, now.timeIntervalSince(startTime))

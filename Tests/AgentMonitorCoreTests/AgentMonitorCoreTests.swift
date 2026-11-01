@@ -498,4 +498,71 @@ struct AgentMonitorCoreTests {
         #expect(throws: (any Error).self) { try adapter.scan() }
     }
 
+    private func writeCodexRollout(lines: [String], paddingBytes: Int = 0) throws -> URL {
+        let fm = FileManager.default
+        let sessionsDir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("sessions/2026/10/30")
+        try fm.createDirectory(at: sessionsDir, withIntermediateDirectories: true)
+        var body = lines[0] + "\n"
+        if paddingBytes > 0 {
+            let filler = #"{"type":"response_item","payload":{"type":"reasoning","summary":[]}}"#
+            body += String(repeating: filler + "\n", count: paddingBytes / filler.count + 1)
+        }
+        body += lines.dropFirst().joined(separator: "\n") + "\n"
+        let file = sessionsDir.appendingPathComponent("rollout-2026-10-30T02-15-31-01a188df-cf09-7763-8796-5609ef455ca1.jsonl")
+        try body.write(to: file, atomically: true, encoding: .utf8)
+        return sessionsDir.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    }
+
+    @Test("Codex: heartbeat turn suppresses completion; session_meta read from file head")
+    func testCodexHeartbeatAndHeadMeta() throws {
+        let sessionsDir = try writeCodexRollout(lines: [
+            #"{"type":"session_meta","payload":{"session_id":"01a188df-cf09-7763-8796-5609ef455ca1","cwd":"/Users/cy/Documents/Codex/new-chat"}}"#,
+            #"{"type":"event_msg","payload":{"type":"task_started"}}"#,
+            #"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<heartbeat>\n  <automation_id>automation</automation_id>\n  <decision>DONT_NOTIFY</decision>\n</heartbeat>"}]}}"#,
+            #"{"type":"event_msg","payload":{"type":"task_complete"}}"#
+        ], paddingBytes: 100_000)
+
+        let adapter = CodexAdapter(sessionsDirectory: sessionsDir, sessionIndexURL: sessionsDir.appendingPathComponent("none.jsonl"))
+        let session = try #require(try adapter.scan().first)
+        #expect(session.id == "codex:01a188df-cf09-7763-8796-5609ef455ca1")
+        #expect(session.cwd == "/Users/cy/Documents/Codex/new-chat")
+        #expect(session.state == .idle)
+        #expect(session.suppressCompletion)
+        #expect(session.detail == nil)
+    }
+
+    @Test("Codex: ordinary completed turn is not suppressed")
+    func testCodexNormalTurnNotSuppressed() throws {
+        let sessionsDir = try writeCodexRollout(lines: [
+            #"{"type":"session_meta","payload":{"session_id":"01a188df-cf09-7763-8796-5609ef455ca1","cwd":"/tmp/x"}}"#,
+            #"{"type":"event_msg","payload":{"type":"task_started"}}"#,
+            #"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"已修复并部署。"}]}}"#,
+            #"{"type":"event_msg","payload":{"type":"task_complete"}}"#
+        ])
+
+        let adapter = CodexAdapter(sessionsDirectory: sessionsDir, sessionIndexURL: sessionsDir.appendingPathComponent("none.jsonl"))
+        let session = try #require(try adapter.scan().first)
+        #expect(!session.suppressCompletion)
+        #expect(session.detail == "已修复并部署。")
+    }
+
+    @Test("SessionStore: running -> idle with suppressCompletion stays idle")
+    func testSessionStoreSuppressCompletion() throws {
+        let mock = MockAdapter(kind: .codex)
+        let store = SessionStore(adapters: [mock])
+
+        mock.mockSessions = [AgentSession(id: "codex:hb", kind: .codex, title: "巡检", state: .running)]
+        _ = store.refresh()
+
+        mock.mockSessions = [AgentSession(id: "codex:hb", kind: .codex, title: "巡检", state: .idle, suppressCompletion: true)]
+        let transitions = store.refresh()
+
+        #expect(store.currentSessions.first?.state == .idle)
+        if case .stateChanged(_, let from, let to)? = transitions.first {
+            #expect(from == .running)
+            #expect(to == .idle)
+        } else {
+            Issue.record("Expected running -> idle transition")
+        }
+    }
 }

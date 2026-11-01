@@ -8,6 +8,10 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
     public let maxAgeSeconds: TimeInterval
     public let activeThreshold: TimeInterval // Threshold to consider an uncompleted task running (default 10 min)
 
+    // session_meta is the first line of a rollout and never changes, so cache it per file.
+    private var metaCache: [String: (sessionId: String?, cwd: String?)] = [:]
+    private let metaCacheLock = NSLock()
+
     public init(
         sessionsDirectory: URL? = nil,
         sessionIndexURL: URL? = nil,
@@ -64,51 +68,87 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
                 continue
             }
 
-            let nativeId = summary.sessionId ?? extractIdFromFilename(fileURL.lastPathComponent)
-            let title = threadNames[nativeId] ?? summary.title ?? summary.cwdLastComponent ?? "Codex"
+            let meta = sessionMeta(fileURL: fileURL)
+            let nativeId = summary.sessionId ?? meta.sessionId ?? extractIdFromFilename(fileURL.lastPathComponent)
+            let cwd = summary.cwd ?? meta.cwd
+            let title = threadNames[nativeId] ?? summary.title ?? cwd.map { ($0 as NSString).lastPathComponent } ?? "Codex"
 
             var state: SessionState = .idle
             var waitingLabel: String? = nil
             var detailIsCommand = false
             var detail = summary.detail
 
+            let isFresh = now.timeIntervalSince(mtime) <= activeThreshold
             switch summary.lastEventType {
             case .taskComplete, .aborted, .none:
                 state = .idle
             case .waitingEscalation:
                 // Heuristic: uncompleted function call requiring escalated sandbox permissions
-                state = .waitingForUser
-                waitingLabel = "等待授权"
-                detail = summary.activeToolCmd ?? summary.detail ?? "执行操作"
-                detailIsCommand = summary.detailIsCommand
+                if isFresh {
+                    state = .waitingForUser
+                    waitingLabel = "等待授权"
+                    detail = summary.activeToolCmd ?? summary.detail ?? "执行操作"
+                    detailIsCommand = summary.detailIsCommand
+                }
             case .taskStarted, .inProgressTool:
                 // If modified within activeThreshold (e.g. 10 minutes), consider it running; otherwise timed out/aborted
-                if now.timeIntervalSince(mtime) <= activeThreshold {
+                if isFresh {
                     state = .running
                     if detail == nil {
                         detail = "正在思考…"
                     }
-                } else {
-                    state = .idle
                 }
+            }
+
+            // Automation runs (scheduled checks) end with a <heartbeat> message; they are silent background
+            // turns, so the store must not promote them to completed or notify.
+            if summary.isHeartbeat {
+                detail = nil
             }
 
             let session = AgentSession(
                 id: "\(kind.rawValue):\(nativeId)",
                 kind: kind,
                 title: title,
-                cwd: summary.cwd,
+                cwd: cwd,
                 state: state,
                 stateSince: mtime,
                 lastActivity: mtime,
                 detail: detail,
                 detailIsCommand: detailIsCommand,
-                waitingLabel: waitingLabel
+                waitingLabel: waitingLabel,
+                suppressCompletion: summary.isHeartbeat
             )
             results.append(session)
         }
 
         return results
+    }
+
+    private func sessionMeta(fileURL: URL) -> (sessionId: String?, cwd: String?) {
+        metaCacheLock.lock()
+        if let cached = metaCache[fileURL.path] {
+            metaCacheLock.unlock()
+            return cached
+        }
+        metaCacheLock.unlock()
+
+        // The first line may still be being written; don't cache until it is complete.
+        guard let line = FileUtils.readFirstLine(fileURL: fileURL, maxBytes: 1 << 20) else {
+            return (nil, nil)
+        }
+        var result: (sessionId: String?, cwd: String?) = (nil, nil)
+        if let data = line.data(using: .utf8),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           json["type"] as? String == "session_meta",
+           let p = json["payload"] as? [String: Any] {
+            result = (p["session_id"] as? String ?? p["id"] as? String, p["cwd"] as? String)
+        }
+
+        metaCacheLock.lock()
+        metaCache[fileURL.path] = result
+        metaCacheLock.unlock()
+        return result
     }
 
     private func discoverRolloutFiles() -> [URL] {
@@ -165,6 +205,7 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
         var cwdLastComponent: String?
         var lastEventType: RolloutEventType = .none
         var activeToolCmd: String?
+        var isHeartbeat: Bool = false
         var detail: String?
         var detailIsCommand: Bool = false
     }
@@ -207,6 +248,7 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
             if type == "event_msg", let p = payload, let ptype = p["type"] as? String {
                 switch ptype {
                 case "task_started":
+                    lastAssistantMessage = nil
                     summary.lastEventType = .taskStarted
                     summary.detail = "正在思考…"
                     summary.detailIsCommand = false
@@ -276,6 +318,7 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
         if summary.lastEventType == .taskComplete && summary.detail == nil {
             summary.detail = lastAssistantMessage
         }
+        summary.isHeartbeat = lastAssistantMessage?.hasPrefix("<heartbeat>") ?? false
 
         return summary
     }

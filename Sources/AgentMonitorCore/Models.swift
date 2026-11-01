@@ -54,6 +54,7 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
     public var waitingLabel: String? // "等待授权" 或 "在问你"
     public var completedDuration: TimeInterval?
     public var entrypoint: String?
+    public var suppressCompletion: Bool // 本轮结束不升级为 completed（例如 Codex 定时任务的 heartbeat）
 
     public init(
         id: String,
@@ -67,7 +68,8 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
         detailIsCommand: Bool = false,
         waitingLabel: String? = nil,
         completedDuration: TimeInterval? = nil,
-        entrypoint: String? = nil
+        entrypoint: String? = nil,
+        suppressCompletion: Bool = false
     ) {
         self.id = id
         self.kind = kind
@@ -81,5 +83,6 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
         self.waitingLabel = waitingLabel
         self.completedDuration = completedDuration
         self.entrypoint = entrypoint
+        self.suppressCompletion = suppressCompletion
     }
 }

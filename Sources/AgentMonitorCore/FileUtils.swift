@@ -28,4 +28,25 @@ public enum FileUtils {
             return nil
         }
     }
+
+    /// Reads the first line of a file, stopping at `maxBytes`. Returns nil if no newline was found within the limit.
+    public static func readFirstLine(fileURL: URL, maxBytes: Int) -> String? {
+        guard let fileHandle = try? FileHandle(forReadingFrom: fileURL) else {
+            return nil
+        }
+        defer { try? fileHandle.close() }
+
+        var buffer = Data()
+        while buffer.count < maxBytes {
+            guard let chunk = try? fileHandle.read(upToCount: 64 * 1024), !chunk.isEmpty else {
+                break
+            }
+            if let newline = chunk.firstIndex(of: UInt8(ascii: "\n")) {
+                buffer.append(chunk[chunk.startIndex..<newline])
+                return String(decoding: buffer, as: UTF8.self)
+            }
+            buffer.append(chunk)
+        }
+        return nil
+    }
 }
