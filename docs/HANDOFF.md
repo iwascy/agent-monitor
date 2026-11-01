@@ -175,3 +175,70 @@ Initial transitions generated: 3 (suppressed from notifications)
   - dsh 中止的回合设置 `suppressCompletion`，detail 刷新为最后一条助手文本；
   - CLI 会话（Claude `entrypoint == "cli"` 和 dsh）激活终端时，优先激活正在运行的终端（Ghostty / iTerm / Warp / WezTerm / kitty / Alacritty / Terminal），都没运行时才启动第一个已安装的。
 
+---
+
+## 4. UI 修复与设计稿对齐 (GEMINI_FIX_UI.md)
+
+依据 `docs/GEMINI_FIX_UI.md` 与 `docs/design/` 原生设计规范（`Main.dc.html`、`Dark.dc.html`、`States.dc.html`），逐项完成了所有 UI 问题修复、单元测试与真机截图比对。
+
+### 4.1 修复清单落实
+
+1. **#1 菜单栏图标空白修复 (`MenuBarIconRenderer`, P0)**:
+   - **根本原因**：`MenuBarExtra` 的 label 仅支持 `Image` 与 `Text`，原 `MenuBarLabelView` 中包含的 `Shape`、`Circle`、`Capsule` 会被系统静默丢弃，导致菜单栏空白且无法点击触发弹窗。
+   - **改法**：
+     - 新增 `MenuBarIconRenderer`，将 16pt 轮廓图标、优先级状态圆点、等待数量胶囊角标（底色 `#C2410C`，10.5pt 粗体白字，高 15pt，最小宽 16pt）以及划线铃铛（13pt，间隔 5pt）**全部渲染进单个 `@2x` Retina 矢量的 `NSImage`**。
+     - 无彩色元素（无活动 `idle` 或静音无活动）时图形以纯黑绘制并标记 `isTemplate = true`，交由系统统一随菜单栏外观着色；
+     - 存在彩色元素（状态点或等待角标）时设置 `isTemplate = false`，图形与铃铛在 `drawingHandler` 动态以 `NSColor.labelColor` 取色，确保深色/浅色菜单栏均清晰可见。
+   - **单测**：新增单元测试覆盖 8 种状态组合下的尺寸（`16x16`、`37x16`、`34x16`、`42x16`、`55x16`）及 `isTemplate` 状态判断。
+
+2. **#2 通知图标与附件 (`IconManager` / `build-app.sh`, P0)**:
+   - **App 图标生成**：编写 `scripts/make-icon.swift`，按照苹果 macOS 824/1024 内容区及 185/1024 圆角规范，绘制 `#1D1D1F` 黑色圆角方块、白色图形及 `#F0841C` 橙色圆点，输出 16~1024 全尺寸 iconset，并通过 `iconutil -c icns` 组装为 `AppIcon.icns` 放置于 bundle Resources 目录；`Info.plist` 配置 `CFBundleIconFile = AppIcon`。
+   - **右侧 Agent 附件**：`IconManager.cachedIconPNGURL(for:)` 首次按需将对应 Agent 的官方高分辨率图标渲染导出至 `~/Library/Caches/com.cy.agentmonitor/icons/<kind>.png`。`Notifier` 在触发通知前安全复制至临时文件并构造 `UNNotificationAttachment`，防止系统移走缓存；异常捕获降级保障通知稳定派发。
+   - **文档补充**：`README.md` 补充 LaunchServices 缓存刷新指令（`lsregister -f`）。
+
+3. **#3 通知内容对齐 (`NotificationFormatter`, P1)**:
+   - 新建 `NotificationFormatter` 工具类：
+     - **标题**：过滤换行符（`\r\n` / `\n`），合并空格并截断至 40 字以内（超长加省略号 `…`），格式为 `\(agent) · \(title)`。
+     - **副标题**：等待回复动态区分“等待授权”与“在问你”（取 `waitingLabel`）；完成状态格式化为“已完成 · 用时 6 分 12 秒”。
+     - **正文**：去除 Markdown 超链接保留文本（`[text](url)` -> `text`）、反引号、粗体星号、代码块与 `#` 标题符号，合并空白并截断至 120 字。
+     - **分组**：设置 `threadIdentifier = session.id`，实现会话聚合。
+
+4. **#4 面板逐项对齐设计稿 (P1)**:
+   - **双层背景消除**：移除 `MenuView` 内部与 `MenuBarExtra(.window)` 窗口冲突的多余 `clipShape` 与内层阴影边框，统一由系统窗口呈现圆角与材质，内嵌精确毛玻璃色块（浅色 `rgba(248,248,250,0.8)` / 深色 `rgba(38,38,42,0.78)`）。
+   - **集中 Palette 定义**：统一管理 Light / Dark 双套配色，覆盖卡片（已完成 `#1A6E30` / `#5FDC7E`+`#8DE6A2`、空闲 5% / 7% 灰底、等你 `#9A3C05` / `#FFB24D`）、分组标题（`#636366` / `#A1A1A6`，内边距 `6 8 0`）、时间标签（等你基于 `stateSince` 计算耗时且字重 500；已完成带“前”字）。
+   - **细节对齐**：等你框上边距调优为 4pt；已完成行对勾圆点 12pt 内嵌双色对勾；运行中行 7 8 内边距并添加 1.8s 光环扩散脉冲（`PhaseAnimator` 零外部宏依赖）；Agent 图标 34pt 负 2pt 外边距；底部操作按钮 30x28pt 圆角 7pt。
+
+---
+
+### 4.2 截图对比与验证
+
+所有截图存放在 `docs/screenshots/` 目录中，在真机 macOS 环境下截取：
+
+#### 1. 菜单栏状态图标（浅色 / 深色）
+| 状态 | 浅色菜单栏 | 深色菜单栏 | 规格核对 |
+|---|---|---|---|
+| **无活动** | ![idle-light](screenshots/menubar-idle-light.png) | ![idle-dark](screenshots/menubar-idle-dark.png) | 16pt 单色圆角矩形与两条横线，`isTemplate=true` 随系统着色 |
+| **运行中** | ![running-light](screenshots/menubar-running-light.png) | ![running-dark](screenshots/menubar-running-dark.png) | 右上角 5.4pt 蓝点 (`#0A84FF`)，`isTemplate=false`，线条取 `labelColor` |
+| **已完成** | ![completed-light](screenshots/menubar-completed-light.png) | ![completed-dark](screenshots/menubar-completed-dark.png) | 右上角绿点 (`#34C759`) |
+| **等你回复** | ![waiting-light](screenshots/menubar-waiting-light.png) | ![waiting-dark](screenshots/menubar-waiting-dark.png) | 橙点 (`#F0841C`) + 右侧 `#C2410C` 胶囊数字角标（高度 15pt，间距 5pt） |
+| **通知已暂停** | ![paused-light](screenshots/menubar-paused-light.png) | ![paused-dark](screenshots/menubar-paused-dark.png) | 状态点保留，右侧附带 13pt 划线铃铛图标（间距 5pt） |
+
+#### 2. 菜单栏面板对齐
+| 模式 | 实机截图 | 设计稿对照说明 |
+|---|---|---|
+| **浅色面板** | ![panel-light](screenshots/panel-light.png) | 对齐 `Main.dc.html`：384pt 宽度、4 列统计卡片高对比度色值、SF Mono 等宽命令框、运行中蓝点脉冲、30pt 视觉 Agent 图标、底部 30×28pt 操作按钮 |
+| **深色面板** | ![panel-dark](screenshots/panel-dark.png) | 对齐 `Dark.dc.html`：深色卡片对比度保证、0.5pt 分隔线、已完成绿色圆点内嵌 `#0B2E15` 深绿勾、深色模式悬停态及时间标签 |
+
+#### 3. 系统通知横幅
+| 通知类型 | 实机通知横幅截图 | 细节核对 |
+|---|---|---|
+| **等你回复** | ![notification-waiting](screenshots/notification-waiting.png) | 标题“Codex · 重构 Cookie 同步逻辑”、副标题“等待授权”、正文等宽命令“git push --force origin main”、右侧 Codex 官方图标附件 |
+| **已完成** | ![notification-completed](screenshots/notification-completed.png) | 标题“Antigravity · Loon 规则整理”、副标题“已完成 · 用时 6 分 12 秒”、正文摘要、右侧 Antigravity 官方图标附件 |
+
+---
+
+### 4.3 自动化测试与构建状态
+
+- `swift test`：22 项单元与集成测试全部通过，涵盖状态流转、各 Agent 适配器扫描、WAL 空闲快照容错、`MenuBarIconRenderer` 尺寸与模板模式验证、`NotificationFormatter` 标题/副标题/正文清洗验证。
+- `scripts/build-app.sh`：Release 编译与打包、`AppIcon.icns` 自动合成与签入、ad-hoc codesign 一体化运行通过。
+
