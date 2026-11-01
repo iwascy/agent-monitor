@@ -14,6 +14,10 @@ let package = Package(
         .executable(
             name: "AgentMonitor",
             targets: ["AgentMonitor"]
+        ),
+        .executable(
+            name: "probe",
+            targets: ["probe"]
         )
     ],
     dependencies: [],
@@ -27,6 +31,11 @@ let package = Package(
             name: "AgentMonitor",
             dependencies: ["AgentMonitorCore"],
             path: "Sources/AgentMonitor"
+        ),
+        .executableTarget(
+            name: "probe",
+            dependencies: ["AgentMonitorCore"],
+            path: "Sources/Probe"
         ),
         .testTarget(
             name: "AgentMonitorCoreTests",
