@@ -8,12 +8,13 @@ public struct ClaudeSessionJSON: Codable, Sendable {
     public let kind: String?
     public let entrypoint: String?
     public let status: String?
+    public let waitingFor: String?
     public let startedAt: Int64?
     public let updatedAt: Int64?
     public let statusUpdatedAt: Int64?
 
     enum CodingKeys: String, CodingKey {
-        case pid, sessionId, cwd, name, kind, entrypoint, status
+        case pid, sessionId, cwd, name, kind, entrypoint, status, waitingFor
         case startedAt, updatedAt, statusUpdatedAt
     }
 }
@@ -88,7 +89,8 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
                 continue
             }
 
-            let status = sessionMeta.status ?? "idle"
+            let status = sessionMeta.status
+            let waitingFor = sessionMeta.waitingFor
             let sessionId = sessionMeta.sessionId
             let cwd = sessionMeta.cwd
 
@@ -121,7 +123,23 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
                 resolvedTitle = transcriptTitle
             }
 
-            if status == "busy" {
+            if status == "waiting" {
+                state = .waitingForUser
+                if waitingFor == "input needed" {
+                    waitingLabel = "在问你"
+                } else {
+                    waitingLabel = "等待授权"
+                }
+                detail = transcriptSummary?.pendingToolDetail ?? transcriptSummary?.lastAssistantText
+                detailIsCommand = transcriptSummary?.isCommand ?? false
+            } else if status == "busy" {
+                state = .running
+                detail = transcriptSummary?.runningDetail ?? "正在思考…"
+            } else if status == "idle" {
+                state = .idle
+                detail = transcriptSummary?.lastAssistantText
+            } else {
+                // Fallback when status field is missing: check transcript for pending tool use
                 if let ts = transcriptSummary, ts.hasPendingToolUse {
                     let transcriptMtime = (try? transcriptURL?.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? updatedAt
                     if now.timeIntervalSince(transcriptMtime) >= waitingThreshold {
@@ -134,13 +152,9 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
                         detail = ts.runningDetail ?? "正在思考…"
                     }
                 } else {
-                    state = .running
-                    detail = transcriptSummary?.runningDetail ?? "正在思考…"
+                    state = .idle
+                    detail = transcriptSummary?.lastAssistantText
                 }
-            } else {
-                // status == "idle"
-                state = .idle
-                detail = transcriptSummary?.lastAssistantText
             }
 
             let session = AgentSession(
@@ -177,6 +191,7 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
         }
 
         var summary = TranscriptSummary()
+        var pendingToolOrder: [String] = []
         var pendingToolUses: [String: (name: String, detail: String, isCmd: Bool, isQuestion: Bool)] = [:]
 
         for line in lines {
@@ -216,6 +231,9 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
                                 }
                             }
 
+                            if pendingToolUses[toolId] == nil {
+                                pendingToolOrder.append(toolId)
+                            }
                             pendingToolUses[toolId] = (name, toolDetail, isCmd, isQuestion)
                             summary.runningDetail = "正在运行 \(name) · \(toolDetail)"
                         } else if itemType == "text", let text = item["text"] as? String {
@@ -233,13 +251,14 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
                         if item["type"] as? String == "tool_result",
                            let toolUseId = item["tool_use_id"] as? String {
                             pendingToolUses.removeValue(forKey: toolUseId)
+                            pendingToolOrder.removeAll { $0 == toolUseId }
                         }
                     }
                 }
             }
         }
 
-        if let lastPending = Array(pendingToolUses.values).last {
+        if let lastId = pendingToolOrder.last, let lastPending = pendingToolUses[lastId] {
             summary.hasPendingToolUse = true
             summary.pendingToolDetail = lastPending.detail
             summary.isCommand = lastPending.isCmd

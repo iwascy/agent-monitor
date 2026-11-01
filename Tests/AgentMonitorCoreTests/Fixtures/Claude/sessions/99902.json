@@ -1,1 +1,1 @@
-{"pid":99902,"sessionId":"cc-session-waiting-2","cwd":"/Users/cy/code/project-b","name":"Project B Deploy","status":"busy","startedAt":1700000000000,"updatedAt":1700000005000}
+{"pid":99902,"sessionId":"cc-session-waiting-2","cwd":"/Users/cy/code/project-b","name":"Project B Deploy","status":"waiting","waitingFor":"sandbox request","startedAt":1700000000000,"updatedAt":1700000005000}
