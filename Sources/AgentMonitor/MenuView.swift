@@ -171,7 +171,6 @@ public struct MenuView: View {
         }
         .padding(10)
         .frame(width: 384)
-        .background(palette.panelBg)
         // Passing nil follows the system; forcing a value here would pin the panel to its first appearance
         .preferredColorScheme(forcedColorScheme)
     }

@@ -242,3 +242,19 @@ Initial transitions generated: 3 (suppressed from notifications)
 - `swift test`：22 项单元与集成测试全部通过，涵盖状态流转、各 Agent 适配器扫描、WAL 空闲快照容错、`MenuBarIconRenderer` 尺寸与模板模式验证、`NotificationFormatter` 标题/副标题/正文清洗验证。
 - `scripts/build-app.sh`：Release 编译与打包、`AppIcon.icns` 自动合成与签入、ad-hoc codesign 一体化运行通过。
 
+---
+
+## 5. Liquid Glass（液态玻璃）重构小结 (GEMINI_LIQUID_GLASS.md)
+
+### 5.1 #1 背景探针与平台升级小结
+- **平台升级**：
+  - `Package.swift` 提升至 `swift-tools-version: 6.2`，`platforms: [.macOS(.v26)]`。
+  - `scripts/build-app.sh` 中 `LSMinimumSystemVersion` 升级为 `26.0`。
+  - `README.md` 环境要求同步更新为 macOS 26.0+。
+- **背景探针实测结论**：
+  - 移除了 `MenuView` 根视图上的 `.background(palette.panelBg)`。
+  - 在 macOS 27.2 实机运行打包应用并触发 `MenuBarExtra(.window)` 窗口截图验证（实测 `probe-light.png` / `probe-dark.png`）：
+  - 系统 `MenuBarExtra(.window)` 已经自带完整的原生液态玻璃/材质背景（具有毛玻璃模糊穿透效果、系统标准连续曲线圆角与投影）。
+  - **最终选择**：**方案 a（首选）**，保持不给根视图额外添加背景或材质，由系统原生窗口全权负责背景材质渲染，避免多层材质叠加大面积失真。
+
+

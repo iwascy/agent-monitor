@@ -21,7 +21,7 @@ macOS 原生菜单栏常驻应用，用于实时汇总并监控本机所有 AI A
 
 ## 环境要求
 
-- **操作系统**：macOS 14.0+ (Apple Silicon / Intel)，在 macOS 27.2 Apple Silicon 上验证通过。
+- **操作系统**：macOS 26.0+ (Apple Silicon / Intel)，在 macOS 27.2 Apple Silicon 上验证通过。
 - **编译工具**：Swift 6.4+ / Xcode Command Line Tools（无需安装完整 Xcode，纯 SPM 构建）。
 - **外部依赖**：Homebrew `zstd`（位于 `/opt/homebrew/bin/zstd`，用于 DSH 压缩日志流式解压）。
 
