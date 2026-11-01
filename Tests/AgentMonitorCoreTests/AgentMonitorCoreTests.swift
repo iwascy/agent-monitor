@@ -151,10 +151,8 @@ struct AgentMonitorCoreTests {
         #expect(waitingExec.title == "修复 NAS 启动")
 
         let waitingInput = try #require(sessions.first(where: { $0.id == "codex:cx-uuid-waiting-input" }))
-        #expect(waitingInput.state == .waitingForUser)
-        #expect(waitingInput.waitingLabel == "在问你")
-        #expect(waitingInput.detail == "第一版做成哪种形态？")
-        #expect(waitingInput.detailIsCommand == false)
+        #expect(waitingInput.state == .idle)
+        #expect(waitingInput.detail == "已中止")
         #expect(waitingInput.title == "重构 Cookie 逻辑")
 
         let running = try #require(sessions.first(where: { $0.id == "codex:cx-uuid-running" }))

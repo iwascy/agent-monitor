@@ -5,31 +5,21 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
 
     public let sessionsDirectory: URL
     public let sessionIndexURL: URL
-    public let isCodexRunning: @Sendable () -> Bool
     public let maxAgeSeconds: TimeInterval
+    public let activeThreshold: TimeInterval // Threshold to consider an uncompleted task running (default 10 min)
 
     public init(
         sessionsDirectory: URL? = nil,
         sessionIndexURL: URL? = nil,
-        isCodexRunning: (@Sendable () -> Bool)? = nil,
-        maxAgeSeconds: TimeInterval = 6 * 3600
+        isCodexRunning: (@Sendable () -> Bool)? = nil, // Kept for backwards compatibility if needed
+        maxAgeSeconds: TimeInterval = 6 * 3600,
+        activeThreshold: TimeInterval = 600.0
     ) {
         let home = FileManager.default.homeDirectoryForCurrentUser
         self.sessionsDirectory = sessionsDirectory ?? home.appendingPathComponent(".codex/sessions")
         self.sessionIndexURL = sessionIndexURL ?? home.appendingPathComponent(".codex/session_index.jsonl")
-        self.isCodexRunning = isCodexRunning ?? {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-            process.arguments = ["-q", "-f", "codex"]
-            do {
-                try process.run()
-                process.waitUntilExit()
-                return process.terminationStatus == 0
-            } catch {
-                return false
-            }
-        }
         self.maxAgeSeconds = maxAgeSeconds
+        self.activeThreshold = activeThreshold
     }
 
     public var watchPaths: [URL] {
@@ -56,33 +46,12 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
             }
         }
 
-        // 2. Discover rollout files from recent 2 days
+        // 2. Discover all rollout files in sessions directory
         guard fm.fileExists(atPath: sessionsDirectory.path) else {
             return []
         }
 
-        let calendar = Calendar(identifier: .gregorian)
-        var dayURLs: [URL] = []
-        for dayOffset in 0...1 {
-            if let date = calendar.date(byAdding: .day, value: -dayOffset, to: now) {
-                let year = String(format: "%04d", calendar.component(.year, from: date))
-                let month = String(format: "%02d", calendar.component(.month, from: date))
-                let day = String(format: "%02d", calendar.component(.day, from: date))
-                let dir = sessionsDirectory.appendingPathComponent(year).appendingPathComponent(month).appendingPathComponent(day)
-                if fm.fileExists(atPath: dir.path) {
-                    dayURLs.append(dir)
-                }
-            }
-        }
-
-        var rolloutURLs: [URL] = []
-        for dayDir in dayURLs {
-            if let files = try? fm.contentsOfDirectory(at: dayDir, includingPropertiesForKeys: [.contentModificationDateKey], options: [.skipsHiddenFiles]) {
-                rolloutURLs.append(contentsOf: files.filter { $0.lastPathComponent.hasPrefix("rollout-") && $0.pathExtension == "jsonl" })
-            }
-        }
-
-        let isRunning = isCodexRunning()
+        let rolloutURLs = discoverRolloutFiles()
         var results: [AgentSession] = []
 
         for fileURL in rolloutURLs {
@@ -101,26 +70,27 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
             var state: SessionState = .idle
             var waitingLabel: String? = nil
             var detailIsCommand = false
+            var detail = summary.detail
 
             switch summary.lastEventType {
-            case .approvalRequest:
+            case .taskComplete, .aborted, .none:
+                state = .idle
+            case .waitingEscalation:
+                // Heuristic: uncompleted function call requiring escalated sandbox permissions
                 state = .waitingForUser
                 waitingLabel = "等待授权"
+                detail = summary.activeToolCmd ?? summary.detail ?? "执行操作"
                 detailIsCommand = summary.detailIsCommand
-            case .userInputRequest:
-                state = .waitingForUser
-                waitingLabel = "在问你"
-                detailIsCommand = false
-            case .taskComplete:
-                state = .idle
             case .taskStarted, .inProgressTool:
-                if isRunning {
+                // If modified within activeThreshold (e.g. 10 minutes), consider it running; otherwise timed out/aborted
+                if now.timeIntervalSince(mtime) <= activeThreshold {
                     state = .running
+                    if detail == nil {
+                        detail = "正在思考…"
+                    }
                 } else {
                     state = .idle
                 }
-            case .aborted, .none:
-                state = .idle
             }
 
             let session = AgentSession(
@@ -131,7 +101,7 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
                 state: state,
                 stateSince: mtime,
                 lastActivity: mtime,
-                detail: summary.detail,
+                detail: detail,
                 detailIsCommand: detailIsCommand,
                 waitingLabel: waitingLabel
             )
@@ -141,12 +111,38 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
         return results
     }
 
+    private func discoverRolloutFiles() -> [URL] {
+        let fm = FileManager.default
+        guard let enumerator = fm.enumerator(
+            at: sessionsDirectory,
+            includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+
+        var files: [URL] = []
+        for case let fileURL as URL in enumerator {
+            if fileURL.pathExtension == "jsonl" && fileURL.lastPathComponent.hasPrefix("rollout-") {
+                files.append(fileURL)
+            }
+        }
+        return files
+    }
+
     private func extractIdFromFilename(_ filename: String) -> String {
-        // format: rollout-2026-11-01T00-24-07-01a192c6-76d1-7a20-8d79-7b78776c9a55.jsonl
+        // format: rollout-YYYY-MM-DDTHH-MM-SS-<uuid>.jsonl
         let stem = (filename as NSString).deletingPathExtension
-        if let lastDashRange = stem.range(of: "-", options: .backwards) {
-            let idCandidate = String(stem[lastDashRange.upperBound...])
-            if idCandidate.count >= 8 {
+        if stem.count >= 36 {
+            let candidate = String(stem.suffix(36))
+            if candidate.filter({ $0 == "-" }).count == 4 {
+                return candidate
+            }
+        }
+        if stem.hasPrefix("rollout-") && stem.count > 28 {
+            let index = stem.index(stem.startIndex, offsetBy: 28)
+            let idCandidate = String(stem[index...])
+            if !idCandidate.isEmpty {
                 return idCandidate
             }
         }
@@ -156,8 +152,7 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
     private enum RolloutEventType {
         case taskStarted
         case taskComplete
-        case approvalRequest
-        case userInputRequest
+        case waitingEscalation
         case inProgressTool
         case aborted
         case none
@@ -168,7 +163,8 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
         var cwd: String?
         var title: String?
         var cwdLastComponent: String?
-        var lastEventType: RolloutEventType = .taskComplete
+        var lastEventType: RolloutEventType = .none
+        var activeToolCmd: String?
         var detail: String?
         var detailIsCommand: Bool = false
     }
@@ -180,7 +176,6 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
 
         var summary = RolloutSummary()
         var lastAssistantMessage: String?
-        var activeToolCmd: String?
 
         for line in lines {
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -226,24 +221,6 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
                     summary.detail = "已中止"
                     summary.detailIsCommand = false
 
-                case "exec_approval_request":
-                    summary.lastEventType = .approvalRequest
-                    let cmd = p["command"] as? String ?? p["cmd"] as? String ?? activeToolCmd ?? "执行命令"
-                    summary.detail = cmd
-                    summary.detailIsCommand = true
-
-                case "apply_patch_approval_request":
-                    summary.lastEventType = .approvalRequest
-                    let path = p["path"] as? String ?? p["file"] as? String ?? "应用代码修改"
-                    summary.detail = path
-                    summary.detailIsCommand = false
-
-                case "request_user_input", "elicitation_request":
-                    summary.lastEventType = .userInputRequest
-                    let q = p["question"] as? String ?? p["prompt"] as? String ?? "请确认下一步操作"
-                    summary.detail = q
-                    summary.detailIsCommand = false
-
                 default:
                     break
                 }
@@ -261,18 +238,37 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
                     }
                 } else if ptype == "custom_tool_call" || ptype == "function_call" {
                     let toolName = p["name"] as? String ?? "工具"
+                    var cmd: String? = nil
+                    var requiresEscalated = false
+
                     if let args = p["arguments"] as? [String: Any] ?? p["input"] as? [String: Any] {
-                        activeToolCmd = args["cmd"] as? String ?? args["command"] as? String
+                        cmd = args["cmd"] as? String ?? args["command"] as? String
+                        if let perm = args["sandbox_permissions"] as? String, perm == "require_escalated" {
+                            requiresEscalated = true
+                        }
                     } else if let argsStr = p["arguments"] as? String {
-                        activeToolCmd = argsStr
+                        cmd = argsStr
+                        if argsStr.contains("\"sandbox_permissions\":\"require_escalated\"") || argsStr.contains("require_escalated") {
+                            requiresEscalated = true
+                        }
                     }
-                    if summary.lastEventType != .approvalRequest && summary.lastEventType != .userInputRequest {
+
+                    if requiresEscalated {
+                        summary.lastEventType = .waitingEscalation
+                        summary.activeToolCmd = cmd
+                        summary.detail = cmd ?? "执行 \(toolName)"
+                        summary.detailIsCommand = cmd != nil
+                    } else {
                         summary.lastEventType = .inProgressTool
-                        let display = activeToolCmd != nil ? "正在运行 \(toolName) · \(activeToolCmd!)" : "正在运行 \(toolName)…"
+                        let display = cmd != nil ? "正在运行 \(toolName) · \(cmd!)" : "正在运行 \(toolName)…"
                         summary.detail = display
+                        summary.detailIsCommand = false
                     }
                 } else if ptype == "custom_tool_call_output" || ptype == "function_call_output" {
-                    activeToolCmd = nil
+                    if summary.lastEventType == .waitingEscalation || summary.lastEventType == .inProgressTool {
+                        summary.lastEventType = .taskStarted
+                        summary.detail = "正在思考…"
+                    }
                 }
             }
         }
@@ -283,6 +279,4 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
 
         return summary
     }
-
-
 }

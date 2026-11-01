@@ -1,4 +1,4 @@
-{"type":"session_meta","payload":{"session_id":"cx-uuid-completed","cwd":"/Users/cy/code/display"}}
+{"type":"session_meta","payload":{"session_id":"cx-uuid-completed","cwd":"/Users/cy/code/display-edid"}}
 {"type":"event_msg","payload":{"type":"task_started"}}
-{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"text","text":"已查明原因：HDMI EDID 被限制在 8bit RGB。"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"text","text":"已成功排查 HDMI EDID 信号问题。"}]}}
 {"type":"event_msg","payload":{"type":"task_complete"}}
