@@ -31,7 +31,8 @@ public final class IconManager {
             try? fm.createDirectory(at: appCachesDir, withIntermediateDirectories: true)
         }
 
-        let fileURL = appCachesDir.appendingPathComponent("\(kind.rawValue).png")
+        // Bump the version whenever icon rendering changes, so stale PNGs on disk are not reused
+        let fileURL = appCachesDir.appendingPathComponent("\(kind.rawValue)-v2.png")
         if fm.fileExists(atPath: fileURL.path) {
             return fileURL
         }
@@ -149,13 +150,17 @@ public final class IconManager {
         bgPath.lineWidth = 1.0
         bgPath.stroke()
 
-        if var svgString = String(data: svgData, encoding: .utf8) {
-            svgString = svgString.replacingOccurrences(of: "currentColor", with: "#4D6BFE")
-            if let modifiedData = svgString.data(using: .utf8),
-               let svgImage = NSImage(data: modifiedData) {
-                let iconRect = bounds.insetBy(dx: 8, dy: 8)
-                svgImage.draw(in: iconRect, from: .zero, operation: .sourceOver, fraction: 1.0)
-            }
+        // favicon.svg hard-codes fill="#000", so tint by compositing instead of editing the SVG text
+        if let svgImage = NSImage(data: svgData) {
+            let iconRect = bounds.insetBy(dx: 8, dy: 8)
+            let tinted = NSImage(size: iconRect.size)
+            tinted.lockFocus()
+            let tintRect = NSRect(origin: .zero, size: iconRect.size)
+            svgImage.draw(in: tintRect, from: .zero, operation: .sourceOver, fraction: 1.0)
+            NSColor(srgbRed: 0x4D / 255.0, green: 0x6B / 255.0, blue: 0xFE / 255.0, alpha: 1.0).set()
+            tintRect.fill(using: .sourceAtop)
+            tinted.unlockFocus()
+            tinted.draw(in: iconRect, from: .zero, operation: .sourceOver, fraction: 1.0)
         }
 
         image.unlockFocus()
