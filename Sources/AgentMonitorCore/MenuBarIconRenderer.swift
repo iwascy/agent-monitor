@@ -8,7 +8,7 @@ public struct MenuBarIconRenderer {
     ) -> NSSize {
         var width: CGFloat = 16.0
         if waitingCount > 0 {
-            let font = NSFont.systemFont(ofSize: 10.5, weight: .bold)
+            let font = NSFont.systemFont(ofSize: 10.5, weight: .semibold)
             let text = "\(waitingCount)" as NSString
             let textSize = text.size(withAttributes: [.font: font])
             let badgeWidth = max(16.0, ceil(textSize.width) + 8.0)
@@ -32,11 +32,11 @@ public struct MenuBarIconRenderer {
         guard let state = state else { return nil }
         switch state {
         case .waitingForUser:
-            return NSColor(srgbRed: 0xF0 / 255.0, green: 0x84 / 255.0, blue: 0x1C / 255.0, alpha: 1.0)
+            return .systemOrange
         case .completed:
-            return NSColor(srgbRed: 0x34 / 255.0, green: 0xC7 / 255.0, blue: 0x59 / 255.0, alpha: 1.0)
+            return .systemGreen
         case .running:
-            return NSColor(srgbRed: 0x0A / 255.0, green: 0x84 / 255.0, blue: 0xFF / 255.0, alpha: 1.0)
+            return .systemBlue
         case .idle:
             return nil
         }
@@ -58,7 +58,7 @@ public struct MenuBarIconRenderer {
 
             // 1. Draw 16pt main icon
             ctx.saveGState()
-            ctx.setLineWidth(1.4)
+            ctx.setLineWidth(1.5)
             ctx.setLineCap(.round)
             ctx.setLineJoin(.round)
             ctx.setStrokeColor(strokeColor.cgColor)
@@ -78,8 +78,14 @@ public struct MenuBarIconRenderer {
             ctx.addLine(to: CGPoint(x: 7.4, y: 9.9))
             ctx.strokePath()
 
-            // Status dot: cx=12.9, cy=3.6, r=2.7
+            // Status dot: cx=12.9, cy=3.6, r=2.7, with 1pt transparent cutout
             if let dot = dot {
+                ctx.saveGState()
+                ctx.setBlendMode(.clear)
+                let cutoutRect = CGRect(x: 12.9 - (2.7 + 1.0), y: 3.6 - (2.7 + 1.0), width: (2.7 + 1.0) * 2.0, height: (2.7 + 1.0) * 2.0)
+                ctx.fillEllipse(in: cutoutRect)
+                ctx.restoreGState()
+
                 let dotRect = CGRect(x: 12.9 - 2.7, y: 3.6 - 2.7, width: 5.4, height: 5.4)
                 ctx.setFillColor(dot.cgColor)
                 ctx.fillEllipse(in: dotRect)
@@ -91,14 +97,20 @@ public struct MenuBarIconRenderer {
             // 2. Draw Badge (if waitingCount > 0)
             if waitingCount > 0 {
                 currentX += 5.0
-                let font = NSFont.systemFont(ofSize: 10.5, weight: .bold)
+                let font = NSFont.systemFont(ofSize: 10.5, weight: .semibold)
                 let text = "\(waitingCount)" as NSString
                 let textSize = text.size(withAttributes: [.font: font])
                 let badgeWidth = max(16.0, ceil(textSize.width) + 8.0)
                 let badgeRect = CGRect(x: currentX, y: (16.0 - 15.0) / 2.0, width: badgeWidth, height: 15.0)
 
                 ctx.saveGState()
-                let badgeColor = NSColor(srgbRed: 0xC2 / 255.0, green: 0x41 / 255.0, blue: 0x0C / 255.0, alpha: 1.0)
+                let srgbOrange = NSColor.systemOrange.usingColorSpace(.sRGB) ?? NSColor.systemOrange
+                let badgeColor = NSColor(
+                    srgbRed: srgbOrange.redComponent * 0.85,
+                    green: srgbOrange.greenComponent * 0.85,
+                    blue: srgbOrange.blueComponent * 0.85,
+                    alpha: 1.0
+                )
                 ctx.setFillColor(badgeColor.cgColor)
                 let badgePath = CGPath(roundedRect: badgeRect, cornerWidth: 7.5, cornerHeight: 7.5, transform: nil)
                 ctx.addPath(badgePath)
@@ -130,7 +142,7 @@ public struct MenuBarIconRenderer {
                 let scale: CGFloat = 13.0 / 16.0
                 ctx.scaleBy(x: scale, y: scale)
 
-                ctx.setLineWidth(1.4)
+                ctx.setLineWidth(1.5)
                 ctx.setLineCap(.round)
                 ctx.setLineJoin(.round)
                 ctx.setStrokeColor(strokeColor.cgColor)
