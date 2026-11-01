@@ -21,38 +21,41 @@ struct PanelHeader: View {
             Spacer()
 
             GlassEffectContainer(spacing: 8) {
-                // Bell button
-                Button(action: {
-                    viewModel.togglePauseNotifications()
-                }) {
-                    Image(systemName: viewModel.isNotificationsPaused ? "bell.slash.fill" : "bell")
-                        .foregroundColor(viewModel.isNotificationsPaused ? .orange : .primary)
-                }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.circle)
-                .controlSize(.regular)
-                .help(viewModel.isNotificationsPaused ? "恢复通知" : "暂停通知 1 小时")
-                .accessibilityLabel(viewModel.isNotificationsPaused ? "恢复通知" : "暂停通知 1 小时")
-
-                // Settings Menu
-                Menu {
-                    Toggle("开机启动", isOn: Binding(
-                        get: { viewModel.isLaunchAtLogin },
-                        set: { viewModel.setLaunchAtLogin($0) }
-                    ))
-                    Divider()
-                    Button("退出 Agent Monitor") {
-                        NSApplication.shared.terminate(nil)
+                HStack(spacing: 8) {
+                    // Bell button
+                    Button(action: {
+                        viewModel.togglePauseNotifications()
+                    }) {
+                        Image(systemName: viewModel.isNotificationsPaused ? "bell.slash.fill" : "bell")
+                            .foregroundColor(viewModel.isNotificationsPaused ? .orange : .primary)
                     }
-                } label: {
-                    Image(systemName: "slider.horizontal.3")
-                        .foregroundColor(.primary)
+                    .frame(width: 28, height: 28)
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.circle)
+                    .controlSize(.regular)
+                    .help(viewModel.isNotificationsPaused ? "恢复通知" : "暂停通知 1 小时")
+                    .accessibilityLabel(viewModel.isNotificationsPaused ? "恢复通知" : "暂停通知 1 小时")
+
+                    // Settings Menu
+                    Menu {
+                        Toggle("开机启动", isOn: Binding(
+                            get: { viewModel.isLaunchAtLogin },
+                            set: { viewModel.setLaunchAtLogin($0) }
+                        ))
+                        Divider()
+                        Button("退出 Agent Monitor") {
+                            NSApplication.shared.terminate(nil)
+                        }
+                    } label: {
+                        Image(systemName: "slider.horizontal.3")
+                            .foregroundColor(.primary)
+                            .frame(width: 28, height: 28)
+                            .glassEffect(.regular.interactive(), in: .circle)
+                    }
+                    .menuStyle(.button)
+                    .buttonStyle(.plain)
+                    .menuIndicator(.hidden)
                 }
-                .menuStyle(.button)
-                .buttonStyle(.glass)
-                .buttonBorderShape(.circle)
-                .controlSize(.regular)
-                .menuIndicator(.hidden)
             }
         }
         .padding(EdgeInsets(top: 4, leading: 6, bottom: 2, trailing: 6))
