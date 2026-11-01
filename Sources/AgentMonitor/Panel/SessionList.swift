@@ -3,6 +3,7 @@ import AgentMonitorCore
 
 struct SessionList: View {
     @ObservedObject var viewModel: MonitorViewModel
+    @LocalState private var isIdleHovered = false
 
     var body: some View {
         ScrollView {
@@ -41,8 +42,9 @@ struct SessionList: View {
 
                 if viewModel.filterState == nil || viewModel.filterState == .idle {
                     if !idleSessions.isEmpty {
+                        let isExpanded = viewModel.isIdleExpanded || viewModel.filterState == .idle
                         Button(action: {
-                            withAnimation(.easeInOut(duration: 0.2)) {
+                            withAnimation(.smooth) {
                                 viewModel.isIdleExpanded.toggle()
                             }
                         }) {
@@ -51,43 +53,44 @@ struct SessionList: View {
                                     .fill(Color.gray)
                                     .frame(width: 6, height: 6)
                                 Text("空闲 · \(idleSessions.count) 个会话")
-                                    .font(.system(size: 12))
+                                    .font(.caption.weight(.semibold))
                                     .foregroundColor(.secondary)
                                 Spacer()
-                                Image(systemName: viewModel.isIdleExpanded ? "chevron.down" : "chevron.right")
+                                Image(systemName: "chevron.right")
                                     .font(.system(size: 10, weight: .semibold))
                                     .foregroundColor(.secondary)
+                                    .rotationEffect(isExpanded ? .degrees(90) : .zero)
                             }
                             .padding(8)
-                            .background(Color.clear)
-                            .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                            .background(isIdleHovered ? AnyShapeStyle(.fill.quaternary) : AnyShapeStyle(Color.clear))
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         }
                         .buttonStyle(.plain)
+                        .onHover { isIdleHovered = $0 }
 
-                        if viewModel.isIdleExpanded || viewModel.filterState == .idle {
+                        if isExpanded {
                             ForEach(idleSessions) { session in
                                 SessionRow(session: session, viewModel: viewModel)
+                                    .transition(.opacity.combined(with: .move(edge: .top)))
                             }
                         }
                     }
                 }
 
                 if viewModel.sessions.isEmpty {
-                    VStack(spacing: 4) {
-                        Text("暂无活跃会话")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundColor(.secondary)
+                    ContentUnavailableView {
+                        Label("暂无活跃会话", systemImage: "rectangle.stack")
+                    } description: {
                         Text("各 agent 启动后将在此处自动汇总")
-                            .font(.system(size: 11))
-                            .foregroundColor(.secondary.opacity(0.8))
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 24)
                 }
             }
-            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 1)
         }
-        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxHeight: 520)
+        .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
     }
 
     private func sectionHeader(title: String, dotColor: Color) -> some View {
@@ -96,7 +99,7 @@ struct SessionList: View {
                 .fill(dotColor)
                 .frame(width: 6, height: 6)
             Text(title)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.caption.weight(.semibold))
                 .foregroundColor(.secondary)
         }
         .padding(EdgeInsets(top: 6, leading: 8, bottom: 0, trailing: 8))

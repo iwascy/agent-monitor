@@ -9,7 +9,6 @@ public final class MonitorViewModel: ObservableObject {
     @Published public private(set) var isNotificationsPaused: Bool = false
     @Published public private(set) var isLaunchAtLogin: Bool = false
 
-    @Published public var hoveredSessionId: String? = nil
     @Published public var isIdleExpanded: Bool = false
     @Published public var filterState: SessionState? = nil
 
