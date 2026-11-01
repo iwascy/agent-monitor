@@ -143,7 +143,8 @@ public final class DshAdapter: AgentAdapter, @unchecked Sendable {
                     lastActivity: mtime,
                     detail: summary.detail,
                     detailIsCommand: detailIsCommand,
-                    waitingLabel: waitingLabel
+                    waitingLabel: waitingLabel,
+                    suppressCompletion: summary.lastTurnAborted
                 )
                 results.append(session)
             }
@@ -168,6 +169,7 @@ public final class DshAdapter: AgentAdapter, @unchecked Sendable {
         var title: String?
         var isTurnActive: Bool = false
         var hasCompletedTurn: Bool = false
+        var lastTurnAborted: Bool = false
         var hasWaitingQuestion: Bool = false
         var hasPendingApproval: Bool = false
         var detail: String?
@@ -234,6 +236,7 @@ public final class DshAdapter: AgentAdapter, @unchecked Sendable {
                 }
             } else if type == "turn/start" {
                 summary.isTurnActive = true
+                summary.lastTurnAborted = false
                 summary.hasCompletedTurn = false
                 summary.detail = "正在思考…"
                 summary.detailIsCommand = false
@@ -241,19 +244,11 @@ public final class DshAdapter: AgentAdapter, @unchecked Sendable {
                 summary.isTurnActive = false
                 summary.hasWaitingQuestion = false
                 summary.hasPendingApproval = false
-                if let data = json["data"] as? [String: Any],
-                   let reason = data["reason"] as? [String: Any],
-                   let kind = reason["kind"] as? String {
-                    if kind == "completed" {
-                        summary.hasCompletedTurn = true
-                        summary.detail = lastAssistantText
-                    } else {
-                        summary.hasCompletedTurn = false
-                    }
-                } else {
-                    summary.hasCompletedTurn = true
-                    summary.detail = lastAssistantText
-                }
+                // A turn ended by the user (or by an error) is not a completion worth notifying about.
+                let reasonKind = ((json["data"] as? [String: Any])?["reason"] as? [String: Any])?["kind"] as? String
+                summary.hasCompletedTurn = reasonKind == nil || reasonKind == "completed"
+                summary.lastTurnAborted = !summary.hasCompletedTurn
+                summary.detail = lastAssistantText
                 summary.detailIsCommand = false
             } else if type == "tool/call" {
                 if let data = json["data"] as? [String: Any] {
@@ -352,10 +347,13 @@ public final class DshAdapter: AgentAdapter, @unchecked Sendable {
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
 
-            guard let content = String(data: data, encoding: .utf8) else {
-                return []
+            // dsh may be mid-write: a torn final frame decodes only partially, so the output can end inside
+            // a multi-byte character or a JSON line. Decode leniently and drop the unterminated last line.
+            var lines = String(decoding: data, as: UTF8.self).components(separatedBy: .newlines)
+            if data.last != UInt8(ascii: "\n"), !lines.isEmpty {
+                lines.removeLast()
             }
-            return content.components(separatedBy: .newlines)
+            return lines
         } catch {
             return []
         }

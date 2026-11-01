@@ -546,6 +546,27 @@ struct AgentMonitorCoreTests {
         #expect(session.detail == "已修复并部署。")
     }
 
+    @Test("DSH: aborted turn suppresses completion and refreshes detail")
+    func testDshAbortedTurn() throws {
+        let fm = FileManager.default
+        let sessionDir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("--Users-cy-code-x--/session-abc")
+        try fm.createDirectory(at: sessionDir, withIntermediateDirectories: true)
+        let lines = [
+            #"{"type":"session","id":"session-abc","cwd":"/Users/cy/code/x"}"#,
+            #"{"type":"turn/start","seq":1,"data":{"turn":1}}"#,
+            #"{"type":"assistant/message","seq":2,"data":{"message":{"role":"assistant","content":[{"type":"text","text":"先看一下目录结构。"}]}}}"#,
+            #"{"type":"tool/call","seq":3,"data":{"callId":"c1","name":"bash","arguments":"{\"command\":\"ls\"}"}}"#,
+            #"{"type":"turn/end","seq":4,"data":{"turn":1,"reason":{"kind":"aborted"}}}"#
+        ]
+        try (lines.joined(separator: "\n") + "\n").write(to: sessionDir.appendingPathComponent("session.v4.jsonl"), atomically: true, encoding: .utf8)
+
+        let adapter = DshAdapter(sessionsDirectory: sessionDir.deletingLastPathComponent().deletingLastPathComponent(), isLockHeld: { _ in true })
+        let session = try #require(try adapter.scan().first)
+        #expect(session.state == .idle)
+        #expect(session.suppressCompletion)
+        #expect(session.detail == "先看一下目录结构。")
+    }
+
     @Test("SessionStore: running -> idle with suppressCompletion stays idle")
     func testSessionStoreSuppressCompletion() throws {
         let mock = MockAdapter(kind: .codex)
