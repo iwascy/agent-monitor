@@ -262,10 +262,22 @@ public struct MenuView: View {
                             .font(.system(size: 13, weight: .semibold))
                             .lineLimit(1)
                         Spacer()
-                        Text(formattedTime(since: session.lastActivity, state: session.state))
-                            .font(.system(size: 11))
-                            .monospacedDigit()
-                            .foregroundColor(timeColor(for: session.state))
+                        if session.state == .running {
+                            TimelineView(.periodic(from: .now, by: 1)) { context in
+                                let elapsed = max(0, Int(context.date.timeIntervalSince(session.stateSince)))
+                                let m = elapsed / 60
+                                let s = elapsed % 60
+                                Text(String(format: "%d:%02d", m, s))
+                                    .font(.system(size: 11))
+                                    .monospacedDigit()
+                                    .foregroundColor(Color(red: 0.04, green: 0.52, blue: 1.0))
+                            }
+                        } else {
+                            Text(formattedTime(since: session.lastActivity, state: session.state))
+                                .font(.system(size: 11))
+                                .monospacedDigit()
+                                .foregroundColor(timeColor(for: session.state))
+                        }
                     }
 
                     // Agent name · cwd

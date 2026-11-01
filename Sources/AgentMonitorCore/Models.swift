@@ -52,6 +52,7 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
     public var detail: String?       // 例如 "等待授权: Bash(rm ...)"、最后一句助手消息的前 80 字
     public var detailIsCommand: Bool
     public var waitingLabel: String? // "等待授权" 或 "在问你"
+    public var completedDuration: TimeInterval?
 
     public init(
         id: String,
@@ -63,7 +64,8 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
         lastActivity: Date = Date(),
         detail: String? = nil,
         detailIsCommand: Bool = false,
-        waitingLabel: String? = nil
+        waitingLabel: String? = nil,
+        completedDuration: TimeInterval? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -75,5 +77,6 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
         self.detail = detail
         self.detailIsCommand = detailIsCommand
         self.waitingLabel = waitingLabel
+        self.completedDuration = completedDuration
     }
 }

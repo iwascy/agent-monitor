@@ -12,6 +12,7 @@ public final class SessionStore: @unchecked Sendable {
 
     private var sessionCache: [String: AgentSession] = [:]
     private var readCompletedKeys: Set<String> = [] // "\(sessionId):\(completionTimestamp)"
+    private var runningStartTimes: [String: Date] = [:]
     private let lock = NSRecursiveLock()
 
     public var onTransition: (@Sendable (SessionTransition) -> Void)?
@@ -181,19 +182,32 @@ public final class SessionStore: @unchecked Sendable {
                     if existing.state == .running || existing.state == .waitingForUser {
                         if !readCompletedKeys.contains(readKey) {
                             fresh.state = .completed
+                            let startTime = runningStartTimes[id] ?? existing.stateSince
+                            let duration = max(1.0, now.timeIntervalSince(startTime))
+                            fresh.completedDuration = duration
+                            runningStartTimes.removeValue(forKey: id)
                         }
                     } else if existing.state == .completed {
                         // Maintain completed state until marked as read
                         if !readCompletedKeys.contains(readKey) {
                             fresh.state = .completed
+                            fresh.completedDuration = existing.completedDuration
                         }
                     }
                 } else if fresh.state == .running {
+                    // Record running start time if freshly transitioning into running
+                    if existing.state != .running {
+                        runningStartTimes[id] = now
+                    }
                     // Clear read status if session resumes running
                     readCompletedKeys = readCompletedKeys.filter { !$0.hasPrefix("\(fresh.id):") }
                 }
 
-                if existing.state != fresh.state {
+                // Maintain stateSince: retain old value when state hasn't changed, update to now on change
+                if existing.state == fresh.state {
+                    fresh.stateSince = existing.stateSince
+                } else {
+                    fresh.stateSince = now
                     transitions.append(.stateChanged(session: fresh, from: existing.state, to: fresh.state))
                 }
                 sessionCache[id] = fresh
@@ -201,6 +215,10 @@ public final class SessionStore: @unchecked Sendable {
                 // First discovery: idle stays idle
                 if fresh.state == .completed {
                     fresh.state = .idle
+                }
+                fresh.stateSince = fresh.lastActivity
+                if fresh.state == .running {
+                    runningStartTimes[id] = fresh.stateSince
                 }
                 sessionCache[id] = fresh
                 transitions.append(.added(fresh))

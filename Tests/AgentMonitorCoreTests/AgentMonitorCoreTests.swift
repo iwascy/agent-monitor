@@ -289,7 +289,13 @@ struct AgentMonitorCoreTests {
         mock.mockSessions = [s1Waiting]
         let t2 = store.refresh()
         #expect(t2.count == 1)
-        #expect(t2.first == .stateChanged(session: s1Waiting, from: .running, to: .waitingForUser))
+        if case .stateChanged(let session, let from, let to) = t2.first {
+            #expect(session.id == "claudeCode:s1")
+            #expect(from == .running)
+            #expect(to == .waitingForUser)
+        } else {
+            Issue.record("Expected stateChanged transition")
+        }
 
         // 3. Add session that is reported as idle on first scan -> stays idle
         let s2 = AgentSession(id: "claudeCode:s2", kind: .claudeCode, title: "Session 2", state: .idle)

@@ -78,7 +78,7 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         if session.state == .waitingForUser {
             content.subtitle = session.waitingLabel ?? "等待授权"
         } else if session.state == .completed {
-            let durationSeconds = Int(session.lastActivity.timeIntervalSince(session.stateSince))
+            let durationSeconds = Int(session.completedDuration ?? session.lastActivity.timeIntervalSince(session.stateSince))
             let formatted = formatDuration(seconds: max(1, durationSeconds))
             content.subtitle = "已完成 · 用时 \(formatted)"
         }
