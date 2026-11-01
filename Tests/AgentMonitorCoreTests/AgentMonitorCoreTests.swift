@@ -285,7 +285,9 @@ struct AgentMonitorCoreTests {
         }
 
         // 1. Initial scan: 1 running session
-        let s1 = AgentSession(id: "claudeCode:s1", kind: .claudeCode, title: "Session 1", state: .running)
+        // Same timestamp for both: the store sets stateSince = lastActivity on first discovery
+        let seenAt = Date()
+        let s1 = AgentSession(id: "claudeCode:s1", kind: .claudeCode, title: "Session 1", state: .running, stateSince: seenAt, lastActivity: seenAt)
         mock.mockSessions = [s1]
         let t1 = store.refresh()
         #expect(t1.count == 1)
