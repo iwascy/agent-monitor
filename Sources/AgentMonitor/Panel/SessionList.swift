@@ -7,6 +7,9 @@ struct SessionList: View {
     @LocalState private var contentHeight: CGFloat = 0
     @LocalState private var buttonHeight: CGFloat = 46
 
+    /// Tall enough that a typical handful of sessions fits without scrolling, short enough for a 13" screen
+    private let maxListHeight: CGFloat = 600
+
     private var showBottomButton: Bool {
         viewModel.showBottomButton
     }
@@ -101,7 +104,8 @@ struct SessionList: View {
         }
         .scrollBounceBehavior(.basedOnSize)
         .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
-        .safeAreaInset(edge: .bottom) {
+        // spacing: 0 so the inset equals the measured button height that the frame below adds
+        .safeAreaInset(edge: .bottom, spacing: 0) {
             if showBottomButton {
                 Button(action: {
                     withAnimation(.smooth) {
@@ -121,8 +125,8 @@ struct SessionList: View {
                 .frame(maxWidth: .infinity)
             }
         }
-        .frame(height: contentHeight > 0 ? min(contentHeight + (showBottomButton ? buttonHeight : 0), 520) : nil)
-        .frame(maxHeight: 520)
+        .frame(height: contentHeight > 0 ? min(contentHeight + (showBottomButton ? buttonHeight : 0), maxListHeight) : nil)
+        .frame(maxHeight: maxListHeight)
         .clipped()
     }
 

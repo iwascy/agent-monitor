@@ -86,7 +86,7 @@ open build/AgentMonitor.app
   - **会话列表 (SessionList & SessionRow)**：
     - 合并为单一行架构，采用行内独立 `@LocalState` 悬停动效与 12pt continuous 同心圆角；
     - 等你回复命令浅底框采用 `.fill.quaternary` 中性底色，命令单行中间截断；
-    - 列表区域限制 `maxHeight: 520pt`，随内容自然收缩，超出时平滑滚动并搭配 `.scrollEdgeEffectStyle(.soft, for: [.top, .bottom])` 柔和淡出边缘。
+    - 列表区域限制 `maxHeight: 600pt`，随内容自然收缩，超出时平滑滚动并搭配 `.scrollEdgeEffectStyle(.soft, for: [.top, .bottom])` 柔和淡出边缘。
   - **底部浮动操作胶囊**：仅在存在未读已完成会话时，通过 `.safeAreaInset(edge: .bottom)` 浮动展示「全部标为已读」大尺寸玻璃胶囊（`.controlSize(.large)`），配合 `.glassEffectTransition(.materialize)` 平滑显隐。
   - **系统语义色适配**：全面废除 Hex 调色盘，原生适配系统深浅色切换、降低透明度与增加对比度辅助功能设置。
 

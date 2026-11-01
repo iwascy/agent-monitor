@@ -28,11 +28,11 @@ struct PanelHeader: View {
                     }) {
                         Image(systemName: viewModel.isNotificationsPaused ? "bell.slash.fill" : "bell")
                             .foregroundColor(viewModel.isNotificationsPaused ? .orange : .primary)
+                            .frame(width: 28, height: 28)
+                            .contentShape(.circle)
                     }
-                    .frame(width: 28, height: 28)
-                    .buttonStyle(.glass)
-                    .buttonBorderShape(.circle)
-                    .controlSize(.regular)
+                    .buttonStyle(.plain)
+                    .glassEffect(.regular.interactive(), in: .circle)
                     .help(viewModel.isNotificationsPaused ? "恢复通知" : "暂停通知 1 小时")
                     .accessibilityLabel(viewModel.isNotificationsPaused ? "恢复通知" : "暂停通知 1 小时")
 

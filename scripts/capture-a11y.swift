@@ -1,7 +1,7 @@
 // Captures accessibility panel screenshots (reduce transparency & increase contrast) into docs/screenshots/a11y/.
 //
-// Automatically toggles each accessibility setting, takes the screenshot, and immediately reverts the setting.
-// At the end of execution, all accessibility and appearance settings are verified to be restored.
+// Toggles each accessibility setting on, takes the screenshot, then puts the setting back to the value it had
+// before the run. Aborts without capturing if a checkbox can't be found, so it never reports a fake restore.
 
 import AppKit
 import CoreGraphics
@@ -132,10 +132,26 @@ let wasAgentMonitorRunning = !runBash("pgrep -x AgentMonitor || true").isEmpty
 setDarkMode(false)
 openAccessibilityDisplay()
 
-// Safety check initial values
-let initialReduceTrans = getCheckboxValue(name: "減少透明度")
-let initialContrast = getCheckboxValue(name: "增加對比")
-print("Initial settings: 減少透明度=\(initialReduceTrans), 增加對比=\(initialContrast)")
+// The checkbox labels follow the system language; try each known spelling
+let reduceTransparencyNames = ["降低透明度", "減少透明度", "減低透明度", "Reduce transparency"]
+let increaseContrastNames = ["增强对比度", "增加對比", "增加對比度", "Increase contrast"]
+
+func resolveCheckbox(_ candidates: [String]) -> (name: String, value: Int)? {
+    for name in candidates {
+        let value = getCheckboxValue(name: name)
+        if value == 0 || value == 1 { return (name, value) }
+    }
+    return nil
+}
+
+guard let reduceTrans = resolveCheckbox(reduceTransparencyNames),
+      let contrast = resolveCheckbox(increaseContrastNames) else {
+    print("Error: could not find the accessibility checkboxes in System Settings; nothing was changed.")
+    closeSystemSettings()
+    setDarkMode(originalDarkMode)
+    exit(1)
+}
+print("Initial settings: \(reduceTrans.name)=\(reduceTrans.value), \(contrast.name)=\(contrast.value)")
 
 func capturePanel(outPath: String) {
     let proc = launchApp(env: [
@@ -177,26 +193,28 @@ func capturePanel(outPath: String) {
     killAgentMonitor()
 }
 
+// Start from both settings off so each capture shows only one effect
+setCheckbox(name: reduceTrans.name, target: false)
+setCheckbox(name: contrast.name, target: false)
+
 // 1. Capture Reduce Transparency
-print("--> Toggling Reduce Transparency (減少透明度) ON...")
-setCheckbox(name: "減少透明度", target: true)
-let reduceTransPath = "\(destDir)/panel-reduce-transparency.png"
-capturePanel(outPath: reduceTransPath)
-print("--> Restoring Reduce Transparency (減少透明度) OFF...")
-setCheckbox(name: "減少透明度", target: false)
+setCheckbox(name: reduceTrans.name, target: true)
+capturePanel(outPath: "\(destDir)/panel-reduce-transparency.png")
+setCheckbox(name: reduceTrans.name, target: false)
 
 // 2. Capture Increase Contrast
-print("--> Toggling Increase Contrast (增加對比) ON...")
-setCheckbox(name: "增加對比", target: true)
-let increaseContrastPath = "\(destDir)/panel-increase-contrast.png"
-capturePanel(outPath: increaseContrastPath)
-print("--> Restoring Increase Contrast (增加對比) OFF...")
-setCheckbox(name: "增加對比", target: false)
+setCheckbox(name: contrast.name, target: true)
+capturePanel(outPath: "\(destDir)/panel-increase-contrast.png")
+setCheckbox(name: contrast.name, target: false)
 
-// Final verification of restoration
-let finalReduceTrans = getCheckboxValue(name: "減少透明度")
-let finalContrast = getCheckboxValue(name: "增加對比")
-print("Verified restored settings: 減少透明度=\(finalReduceTrans) (expected 0), 增加對比=\(finalContrast) (expected 0)")
+// Put both settings back to what the user had before the run
+setCheckbox(name: reduceTrans.name, target: reduceTrans.value == 1)
+setCheckbox(name: contrast.name, target: contrast.value == 1)
+
+let finalReduceTrans = getCheckboxValue(name: reduceTrans.name)
+let finalContrast = getCheckboxValue(name: contrast.name)
+let restored = finalReduceTrans == reduceTrans.value && finalContrast == contrast.value
+print("Final settings: \(reduceTrans.name)=\(finalReduceTrans), \(contrast.name)=\(finalContrast) (expected \(reduceTrans.value), \(contrast.value))")
 
 closeSystemSettings()
 setDarkMode(originalDarkMode)
@@ -205,4 +223,8 @@ if wasAgentMonitorRunning {
     _ = runBash("open /Users/cy/code/agent-monitor/build/AgentMonitor.app")
 }
 
-print("==> Accessibility captures successfully completed and settings restored.")
+if !restored {
+    print("Warning: accessibility settings differ from their original values; check System Settings › Accessibility › Display.")
+    exit(1)
+}
+print("==> Accessibility captures completed and settings restored.")

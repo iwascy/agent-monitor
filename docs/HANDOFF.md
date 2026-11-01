@@ -389,3 +389,17 @@ Initial transitions generated: 3 (suppressed from notifications)
 
 
 
+## 7. 第二轮 review 后的收尾修复（Claude）
+
+- **列表高度**：
+  - 上限从 520 调到 600，常规 5 条会话不再需要滚动。
+  - 之前总是多出约 8pt 可滚动的高度，原因是 `safeAreaInset` 默认会在按钮和内容之间额外加约 8pt 间距，而这段间距没有算进测得的按钮高度里。现改为 `safeAreaInset(edge: .bottom, spacing: 0)`。
+  - 修复后，`panel-*.png` 里系统设置为「始终显示滚动条」时，不再出现滚动条，右侧时间列也不会被挤开。
+- **头部按钮**：铃铛按钮改成和设置按钮相同的写法：28pt 的 label，加 `.glassEffect(.regular.interactive(), in: .circle)`，再加 `.buttonStyle(.plain)`。现在两个按钮一样大。
+- **单元测试**：新增 `AgentMonitorTests` target，通过 `@testable import AgentMonitor` 测试 `shouldClearFilter` 和 `shouldShowMarkAllAsRead`。SPM 是允许测试 target 依赖可执行 target 的。
+- **`capture-a11y.swift` 截图脚本**：
+  - 截完图后把两个开关恢复到**运行前的原值**，不再一律关闭；
+  - 复选框名称按简体、繁体、英文依次尝试；
+  - 两个开关都找不到时直接退出，不做任何修改；
+  - 恢复后的值和原值不一致时，以非 0 状态码退出。
+  - 这个脚本会修改系统辅助功能设置，所以本轮只做了类型检查，**没有实际运行**。`docs/screenshots/a11y/` 里仍是上一轮的截图。

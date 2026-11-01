@@ -49,6 +49,16 @@ let package = Package(
                     "-plugin-path", "/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing"
                 ])
             ]
+        ),
+        .testTarget(
+            name: "AgentMonitorTests",
+            dependencies: ["AgentMonitor", "AgentMonitorCore"],
+            path: "Tests/AgentMonitorTests",
+            swiftSettings: [
+                .unsafeFlags([
+                    "-plugin-path", "/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing"
+                ])
+            ]
         )
     ]
 )
