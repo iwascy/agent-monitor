@@ -14,6 +14,14 @@ struct SessionList: View {
         viewModel.showBottomButton
     }
 
+    private var totalContentHeight: CGFloat {
+        contentHeight + (showBottomButton ? buttonHeight : 0)
+    }
+
+    private var needsScrolling: Bool {
+        totalContentHeight > maxListHeight
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 6) {
@@ -53,7 +61,7 @@ struct SessionList: View {
                     if !idleSessions.isEmpty {
                         let isExpanded = viewModel.isIdleExpanded || viewModel.filterState == .idle
                         Button(action: {
-                            withAnimation(.smooth) {
+                            withAnimation(.snappy(duration: 0.2)) {
                                 viewModel.isIdleExpanded.toggle()
                             }
                         }) {
@@ -80,8 +88,8 @@ struct SessionList: View {
                         if isExpanded {
                             ForEach(idleSessions) { session in
                                 SessionRow(session: session, viewModel: viewModel)
-                                    .transition(.opacity.combined(with: .move(edge: .top)))
                             }
+                            .transition(.asymmetric(insertion: .opacity, removal: .identity))
                         }
                     }
                 }
@@ -102,6 +110,8 @@ struct SessionList: View {
                 contentHeight = newHeight
             }
         }
+        .scrollDisabled(!needsScrolling)
+        .scrollIndicators(needsScrolling ? .automatic : .never)
         .scrollBounceBehavior(.basedOnSize)
         .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
         // spacing: 0 so the inset equals the measured button height that the frame below adds
@@ -125,7 +135,7 @@ struct SessionList: View {
                 .frame(maxWidth: .infinity)
             }
         }
-        .frame(height: contentHeight > 0 ? min(contentHeight + (showBottomButton ? buttonHeight : 0), maxListHeight) : nil)
+        .frame(height: contentHeight > 0 ? min(totalContentHeight, maxListHeight) : nil)
         .frame(maxHeight: maxListHeight)
         .clipped()
     }
