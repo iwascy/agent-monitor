@@ -653,4 +653,75 @@ struct AgentMonitorCoreTests {
         #expect(waitAndPausedImg.size == NSSize(width: 55, height: 16))
         #expect(waitAndPausedImg.isTemplate == false)
     }
+
+    // MARK: - NotificationFormatter Tests
+
+    @Test("NotificationFormatter: title cleaning and truncation")
+    func testNotificationTitleCleaning() {
+        let raw = "  你是 macOS 原生逆向分析员。\n任务目标是分析一个叫 BetterDisplay 的应用。  "
+        let cleaned = NotificationFormatter.cleanTitle(raw, maxLength: 40)
+        #expect(!cleaned.contains("\n"))
+        #expect(!cleaned.contains("\r"))
+        #expect(cleaned.count <= 40)
+        #expect(cleaned.hasSuffix("…"))
+
+        let session = AgentSession(
+            id: "dsh:1",
+            kind: .dsh,
+            title: raw,
+            state: .running
+        )
+        let formatted = NotificationFormatter.formatTitle(for: session)
+        #expect(formatted.hasPrefix("DeepSeek Harness · "))
+        #expect(formatted.count <= "DeepSeek Harness · ".count + 40)
+    }
+
+    @Test("NotificationFormatter: subtitle for waiting and completed")
+    func testNotificationSubtitle() {
+        let waitAuth = AgentSession(
+            id: "cx:1",
+            kind: .codex,
+            title: "Cookie 同步",
+            state: .waitingForUser,
+            waitingLabel: "等待授权"
+        )
+        #expect(NotificationFormatter.formatSubtitle(for: waitAuth) == "等待授权")
+
+        let waitQuestion = AgentSession(
+            id: "cc:1",
+            kind: .claudeCode,
+            title: "讨论",
+            state: .waitingForUser,
+            waitingLabel: "在问你"
+        )
+        #expect(NotificationFormatter.formatSubtitle(for: waitQuestion) == "在问你")
+
+        let completed = AgentSession(
+            id: "ag:1",
+            kind: .antigravity,
+            title: "Loon",
+            state: .completed,
+            completedDuration: 372
+        )
+        #expect(NotificationFormatter.formatSubtitle(for: completed) == "已完成 · 用时 6 分 12 秒")
+    }
+
+    @Test("NotificationFormatter: body markdown stripping and truncation")
+    func testNotificationBodyCleaning() {
+        let raw = """
+        # 执行结果
+
+        Review 做完了，结论是**现在还不能用**。程序能编译，8 个测试也全过。
+
+        详情请见 `README.md` 与 [docs/REVIEW-1.md](file:///path/to/docs)。
+        """
+        let cleaned = NotificationFormatter.cleanBody(raw, maxLength: 120)
+        #expect(!cleaned.contains("**"))
+        #expect(!cleaned.contains("`"))
+        #expect(!cleaned.contains("#"))
+        #expect(!cleaned.contains("file:///path/to/docs"))
+        #expect(cleaned.contains("docs/REVIEW-1.md"))
+        #expect(cleaned.contains("现在还不能用"))
+        #expect(cleaned.count <= 120)
+    }
 }

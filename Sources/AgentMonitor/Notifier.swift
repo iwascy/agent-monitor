@@ -19,6 +19,39 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
             // Authorization granted or ignored
         }
+
+        if let testKind = ProcessInfo.processInfo.environment["AGENT_MONITOR_TEST_NOTIFICATION"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                self?.sendTestNotification(kind: testKind)
+            }
+        }
+    }
+
+    public func sendTestNotification(kind: String) {
+        let testSession: AgentSession
+        if kind == "waiting" {
+            testSession = AgentSession(
+                id: "test:waiting-\(Int(Date().timeIntervalSince1970))",
+                kind: .codex,
+                title: "重构 Cookie 同步逻辑",
+                cwd: "/Users/cy/code/115-cookie",
+                state: .waitingForUser,
+                detail: "git push --force origin main",
+                detailIsCommand: true,
+                waitingLabel: "等待授权"
+            )
+        } else {
+            testSession = AgentSession(
+                id: "test:completed-\(Int(Date().timeIntervalSince1970))",
+                kind: .antigravity,
+                title: "Loon 规则整理",
+                cwd: "/Users/cy/code/loon-rea",
+                state: .completed,
+                detail: "已生成 3 个文件，测试全部通过",
+                completedDuration: 372
+            )
+        }
+        sendNotification(for: testSession, previousState: nil)
     }
 
     public var isPaused: Bool {
@@ -72,17 +105,10 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         recentNotifications[key] = (session.state, now)
 
         let content = UNMutableNotificationContent()
-        content.title = "\(session.kind.displayName) · \(session.title)"
-
-        if session.state == .waitingForUser {
-            content.subtitle = session.waitingLabel ?? "等待授权"
-        } else if session.state == .completed {
-            let durationSeconds = Int(session.completedDuration ?? session.lastActivity.timeIntervalSince(session.stateSince))
-            let formatted = formatDuration(seconds: max(1, durationSeconds))
-            content.subtitle = "已完成 · 用时 \(formatted)"
-        }
-
-        content.body = session.detail ?? ""
+        content.title = NotificationFormatter.formatTitle(for: session)
+        content.subtitle = NotificationFormatter.formatSubtitle(for: session)
+        content.body = NotificationFormatter.cleanBody(session.detail ?? "")
+        content.threadIdentifier = session.id
         content.sound = UNNotificationSound.default
         content.userInfo = [
             "sessionId": session.id,
