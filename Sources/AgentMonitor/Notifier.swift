@@ -9,6 +9,7 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
     public var pauseUntil: Date? = nil
     public var onNotificationClicked: (@Sendable (String) -> Void)?
+    public var sessionProvider: (@Sendable (String) -> AgentSession?)?
 
     private var recentNotifications: [String: (state: SessionState, timestamp: Date)] = [:]
 
@@ -249,18 +250,36 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
         let userInfo = response.notification.request.content.userInfo
+        let action = userInfo["action"] as? String
         let sessionId = userInfo["sessionId"] as? String
         let kindRaw = userInfo["kind"] as? String
         let entrypoint = userInfo["entrypoint"] as? String
         let cwd = userInfo["cwd"] as? String
 
         Task { @MainActor in
-            if let sid = sessionId {
-                self.onNotificationClicked?(sid)
+            if let act = action, act == "openIntegrationSettings" {
+                SettingsWindowManager.shared.openSettings()
+                return
             }
-            if let kindRaw = kindRaw, let kind = AgentKind(rawValue: kindRaw) {
-                activateApp(for: kind, entrypoint: entrypoint, cwd: cwd)
+
+            guard let sid = sessionId else { return }
+            self.onNotificationClicked?(sid)
+
+            let sessionToJump: AgentSession
+            if let existing = self.sessionProvider?(sid) {
+                sessionToJump = existing
+            } else {
+                let kind = kindRaw.flatMap { AgentKind(rawValue: $0) } ?? .claudeCode
+                sessionToJump = AgentSession(
+                    id: sid,
+                    kind: kind,
+                    title: "",
+                    cwd: cwd,
+                    state: .idle,
+                    entrypoint: entrypoint
+                )
             }
+            SessionJumper.shared.jump(to: sessionToJump)
         }
         completionHandler()
     }
@@ -271,75 +290,5 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
         completionHandler([.banner, .sound])
-    }
-}
-
-@MainActor
-public func activateApp(for kind: AgentKind, entrypoint: String? = nil, cwd: String? = nil) {
-    let ws = NSWorkspace.shared
-
-    // CLI sessions (Claude Code in a terminal, dsh) live in a terminal, not in a desktop app
-    if (kind == .claudeCode && entrypoint == "cli") || kind == .dsh {
-        activateTerminal()
-        return
-    }
-
-    if let bundleId = kind.bundleIdentifier.isEmpty ? nil : kind.bundleIdentifier,
-       let appURL = ws.urlForApplication(withBundleIdentifier: bundleId) {
-        let config = NSWorkspace.OpenConfiguration()
-        config.activates = true
-        ws.openApplication(at: appURL, configuration: config, completionHandler: nil)
-        return
-    }
-
-    // Fallbacks
-    let fallbackPath: String?
-    switch kind {
-    case .claudeCode:
-        fallbackPath = "/Applications/Claude.app"
-    case .codex:
-        fallbackPath = "/Applications/ChatGPT.app"
-    case .antigravity:
-        fallbackPath = "/Applications/Antigravity.app"
-    case .dsh:
-        fallbackPath = nil
-    }
-
-    if let path = fallbackPath, FileManager.default.fileExists(atPath: path) {
-        let appURL = URL(fileURLWithPath: path)
-        let config = NSWorkspace.OpenConfiguration()
-        config.activates = true
-        ws.openApplication(at: appURL, configuration: config, completionHandler: nil)
-    }
-}
-
-private let terminalBundleIds = [
-    "com.mitchellh.ghostty",
-    "com.googlecode.iterm2",
-    "dev.warp.Warp-Stable",
-    "com.github.wez.wezterm",
-    "net.kovidgoyal.kitty",
-    "org.alacritty",
-    "com.apple.Terminal"
-]
-
-/// Brings the terminal forward: a running one first, otherwise launches the first installed one.
-@MainActor
-private func activateTerminal() {
-    for bundleId in terminalBundleIds {
-        if let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleId).first {
-            app.activate()
-            return
-        }
-    }
-
-    let ws = NSWorkspace.shared
-    for bundleId in terminalBundleIds {
-        if let termURL = ws.urlForApplication(withBundleIdentifier: bundleId) {
-            let config = NSWorkspace.OpenConfiguration()
-            config.activates = true
-            ws.openApplication(at: termURL, configuration: config, completionHandler: nil)
-            return
-        }
     }
 }

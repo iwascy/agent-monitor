@@ -196,6 +196,10 @@ public final class MonitorViewModel: ObservableObject {
             }
         }
 
+        notifier.sessionProvider = { [weak self] id in
+            self?.sessionStore.currentSessions.first { $0.id == id }
+        }
+
         notifier.onNotificationClicked = { [weak self] sessionId in
             Task { @MainActor in
                 self?.markAsRead(id: sessionId)
@@ -470,5 +474,33 @@ public final class MonitorViewModel: ObservableObject {
             NSLog("Failed to update launch at login: %@", error.localizedDescription)
             isLaunchAtLogin = SMAppService.mainApp.status == .enabled
         }
+    }
+
+    public func muteSession(cwd: String?, scope: MuteRule.Scope) {
+        guard let path = cwd, !path.isEmpty else { return }
+        let expanded = (path as NSString).expandingTildeInPath
+        let cleanPath = expanded.hasSuffix("/") && expanded.count > 1 ? String(expanded.dropLast()) : expanded
+
+        var rules = AppSettings.shared.muteRules
+        if let idx = rules.firstIndex(where: { $0.path == cleanPath }) {
+            rules[idx].scope = scope
+        } else {
+            rules.append(MuteRule(path: cleanPath, scope: scope, hideInPanel: false))
+        }
+        AppSettings.shared.muteRules = rules
+    }
+
+    public func hideInPanel(cwd: String?) {
+        guard let path = cwd, !path.isEmpty else { return }
+        let expanded = (path as NSString).expandingTildeInPath
+        let cleanPath = expanded.hasSuffix("/") && expanded.count > 1 ? String(expanded.dropLast()) : expanded
+
+        var rules = AppSettings.shared.muteRules
+        if let idx = rules.firstIndex(where: { $0.path == cleanPath }) {
+            rules[idx].hideInPanel = true
+        } else {
+            rules.append(MuteRule(path: cleanPath, scope: .all, hideInPanel: true))
+        }
+        AppSettings.shared.muteRules = rules
     }
 }

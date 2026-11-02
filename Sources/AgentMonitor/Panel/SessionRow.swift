@@ -10,10 +10,12 @@ struct SessionRow: View {
 
     var body: some View {
         Button(action: {
-            withAnimation(.smooth) {
-                viewModel.markAsRead(id: session.id)
+            if session.state == .completed {
+                withAnimation(.smooth) {
+                    viewModel.markAsRead(id: session.id)
+                }
             }
-            activateApp(for: session.kind, entrypoint: session.entrypoint, cwd: session.cwd)
+            SessionJumper.shared.jump(to: session)
         }) {
             HStack(alignment: session.state == .running ? .center : .top, spacing: 10) {
                 Image(nsImage: IconManager.shared.icon(for: session.kind, isDark: colorScheme == .dark))
@@ -48,6 +50,86 @@ struct SessionRow: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
+        .contextMenu {
+            let targetDesc = SessionJumper.shared.describeTarget(for: session)
+            Button {
+                if session.state == .completed {
+                    withAnimation(.smooth) {
+                        viewModel.markAsRead(id: session.id)
+                    }
+                }
+                SessionJumper.shared.jump(to: session)
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Label("跳转到会话", systemImage: "arrow.up.forward.square")
+                    if let desc = targetDesc, !desc.isEmpty {
+                        Text(desc)
+                    }
+                }
+            }
+
+            Button {
+                withAnimation(.smooth) {
+                    viewModel.markAsRead(id: session.id)
+                }
+            } label: {
+                Label("标为已读", systemImage: "checkmark")
+            }
+            .disabled(session.state != .completed)
+
+            Divider()
+
+            let hasCwd = session.cwd != nil && !(session.cwd?.isEmpty ?? true)
+            let cwd = session.cwd ?? ""
+
+            Button {
+                if hasCwd {
+                    let expanded = (cwd as NSString).expandingTildeInPath
+                    NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: expanded)
+                }
+            } label: {
+                Label("在访达中显示目录", systemImage: "folder")
+            }
+            .disabled(!hasCwd)
+
+            Button {
+                if hasCwd {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(cwd, forType: .string)
+                }
+            } label: {
+                Label("拷贝目录路径", systemImage: "doc.on.doc")
+            }
+            .disabled(!hasCwd)
+
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(session.id, forType: .string)
+            } label: {
+                Label("拷贝会话 ID", systemImage: "doc.on.doc")
+            }
+
+            Divider()
+
+            Menu {
+                Button("所有通知") {
+                    viewModel.muteSession(cwd: session.cwd, scope: .all)
+                }
+                Button("仅「已完成」通知") {
+                    viewModel.muteSession(cwd: session.cwd, scope: .completedOnly)
+                }
+            } label: {
+                Label("静音此项目", systemImage: "bell.slash")
+            }
+            .disabled(!hasCwd)
+
+            Button {
+                viewModel.hideInPanel(cwd: session.cwd)
+            } label: {
+                Label("在面板中隐藏此项目", systemImage: "eye.slash")
+            }
+            .disabled(!hasCwd)
+        }
     }
 
     @ViewBuilder

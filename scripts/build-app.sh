@@ -84,6 +84,8 @@ cat <<'EOF' > "$CONTENTS_DIR/Info.plist"
     <true/>
     <key>NSUserNotificationAlertStyle</key>
     <string>alert</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>用于跳转到会话所在的终端标签页。</string>
 </dict>
 </plist>
 EOF
