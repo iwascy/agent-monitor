@@ -37,7 +37,11 @@ MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 
 echo "==> Assembling $APP_DIR..."
-rm -rf "$APP_DIR"
+mkdir -p build
+PACKAGE_DIR="$(mktemp -d "$REPO_ROOT/build/package.XXXXXX")"
+if [ -e "$APP_DIR" ]; then
+    mv "$APP_DIR" "$PACKAGE_DIR/AgentMonitor.previous.app"
+fi
 mkdir -p "$MACOS_DIR"
 mkdir -p "$RESOURCES_DIR"
 
@@ -45,11 +49,9 @@ cp "$BIN_PATH" "$MACOS_DIR/AgentMonitor"
 chmod +x "$MACOS_DIR/AgentMonitor"
 
 echo "==> Generating AppIcon.icns..."
-ICONSET_DIR="build/AppIcon.iconset"
-rm -rf "$ICONSET_DIR"
+ICONSET_DIR="$PACKAGE_DIR/AppIcon.iconset"
 swift scripts/make-icon.swift "$ICONSET_DIR"
 /usr/bin/iconutil -c icns "$ICONSET_DIR" -o "$RESOURCES_DIR/AppIcon.icns"
-rm -rf "$ICONSET_DIR"
 
 cat <<'EOF' > "$CONTENTS_DIR/Info.plist"
 <?xml version="1.0" encoding="UTF-8"?>

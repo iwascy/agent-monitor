@@ -9,7 +9,12 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
     public let activeThreshold: TimeInterval // Threshold to consider an uncompleted task running (default 10 min)
 
     // session_meta is the first line of a rollout and never changes, so cache it per file.
-    private var metaCache: [String: (sessionId: String?, cwd: String?)] = [:]
+    private struct SessionMeta {
+        var sessionId: String?
+        var cwd: String?
+        var isSubagent = false
+    }
+    private var metaCache: [String: SessionMeta] = [:]
     private let metaCacheLock = NSLock()
 
     public init(
@@ -64,11 +69,13 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
                 continue
             }
 
-            guard let summary = parseRollout(fileURL: fileURL) else {
+            let meta = sessionMeta(fileURL: fileURL)
+            // Guardian reviews and other child agents are implementation details of the parent turn.
+            // Their session_id can be the parent's ID; merging them would overwrite its live state.
+            guard !meta.isSubagent, let summary = parseRollout(fileURL: fileURL) else {
                 continue
             }
 
-            let meta = sessionMeta(fileURL: fileURL)
             let nativeId = summary.sessionId ?? meta.sessionId ?? extractIdFromFilename(fileURL.lastPathComponent)
             let cwd = summary.cwd ?? meta.cwd
             let title = threadNames[nativeId] ?? summary.title ?? cwd.map { ($0 as NSString).lastPathComponent } ?? "Codex"
@@ -117,7 +124,7 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
                 detail: detail,
                 detailIsCommand: detailIsCommand,
                 waitingLabel: waitingLabel,
-                suppressCompletion: summary.isHeartbeat
+                suppressCompletion: summary.isHeartbeat || summary.lastEventType != .taskComplete
             )
             results.append(session)
         }
@@ -125,7 +132,7 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
         return results
     }
 
-    private func sessionMeta(fileURL: URL) -> (sessionId: String?, cwd: String?) {
+    private func sessionMeta(fileURL: URL) -> SessionMeta {
         metaCacheLock.lock()
         if let cached = metaCache[fileURL.path] {
             metaCacheLock.unlock()
@@ -135,14 +142,21 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
 
         // The first line may still be being written; don't cache until it is complete.
         guard let line = FileUtils.readFirstLine(fileURL: fileURL, maxBytes: 1 << 20) else {
-            return (nil, nil)
+            return SessionMeta()
         }
-        var result: (sessionId: String?, cwd: String?) = (nil, nil)
+        var result = SessionMeta()
         if let data = line.data(using: .utf8),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            json["type"] as? String == "session_meta",
            let p = json["payload"] as? [String: Any] {
-            result = (p["session_id"] as? String ?? p["id"] as? String, p["cwd"] as? String)
+            result.sessionId = p["id"] as? String ?? p["session_id"] as? String
+            result.cwd = p["cwd"] as? String
+            result.isSubagent = (p["source"] as? [String: Any])?["subagent"] != nil
+                || p["source"] as? String == "subagent"
+                || p["parent_thread_id"] as? String != nil
+                || p["thread_source"] as? String == "guardian_review"
+        } else {
+            return result
         }
 
         metaCacheLock.lock()
@@ -211,7 +225,30 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
     }
 
     private func parseRollout(fileURL: URL) -> RolloutSummary? {
-        guard let lines = FileUtils.readTailLines(fileURL: fileURL, maxBytes: 65536) else {
+        // A single tool result can exceed 64KB. Expand until a lifecycle event is present,
+        // so output/reasoning alone cannot turn an active task into idle.
+        let fileSize = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        var maxBytes = 65536
+        var lines: [String]
+        while true {
+            guard var tail = FileUtils.readTailLines(fileURL: fileURL, maxBytes: maxBytes) else {
+                return nil
+            }
+            // Only consume committed JSONL records while Codex is appending a large record.
+            if tail.last != "" { tail.removeLast() }
+            lines = tail
+            let hasLifecycle = lines.contains { line in
+                guard let data = line.data(using: .utf8),
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      json["type"] as? String == "event_msg",
+                      let payload = json["payload"] as? [String: Any],
+                      let type = payload["type"] as? String else { return false }
+                return ["task_started", "task_complete", "turn_aborted"].contains(type)
+            }
+            if hasLifecycle || maxBytes >= fileSize { break }
+            maxBytes = min(maxBytes * 2, fileSize)
+        }
+        guard !lines.isEmpty else {
             return nil
         }
 
@@ -229,7 +266,7 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
             let payload = json["payload"] as? [String: Any]
 
             if type == "session_meta", let p = payload {
-                if let sid = p["session_id"] as? String ?? p["id"] as? String {
+                if let sid = p["id"] as? String ?? p["session_id"] as? String {
                     summary.sessionId = sid
                 }
                 if let cwd = p["cwd"] as? String {

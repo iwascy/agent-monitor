@@ -77,6 +77,7 @@
    - 每行包含 `id`, `thread_name`, `updated_at`，通过 36 位 UUID 精确关联标题。
 
 ### 3.2 活跃与进程判断
+- **主会话与后台子会话**：`session_meta.payload.id` 优先于旧字段 `session_id`。Codex Desktop 的 guardian 审核日志中，`id` 是审核会话自身 ID，`session_id` 却可能是主会话 ID；混用会让审核完成覆盖主会话运行状态。带 `source.subagent`、`source: "subagent"`、`parent_thread_id` 或 `thread_source: "guardian_review"` 的日志不作为独立会话展示、聚合或通知。
 - **注意**：`pgrep -f codex` 在系统安装了 ChatGPT.app 时由于其内置的 `Codex Framework.framework` 多个 helper 进程而永远返回真，不能作为活跃判据。
 - **判据**：改用 `task_started` 后是否有 `task_complete` / `turn_aborted` 闭合，结合 mtime 新鲜度（10 分钟内未写入视为已中断/退出，判为 idle）。
 
@@ -88,7 +89,8 @@
   - 若最后一个 `function_call` / `custom_tool_call` 的参数中包含 `"sandbox_permissions":"require_escalated"`，且没有对应的 `function_call_output` / `custom_tool_call_output`，且文件在 10 分钟内有写入，启发式判定为 **`waitingForUser`**（"等待授权"）。**注意**：本机全部 rollout 中，`require_escalated` 只出现在工具定义（`additional_tools`）里，真实 tool call 中一次都没有出现，所以这条规则实际上不会触发。
 - **状态映射**：
   - 若处于未闭合的 `task_started` 且距上次修改在 10 分钟内：判定为 **`running`**。
-  - 若出现 `task_complete`、`turn_aborted` 或超时（>10分钟）：Adapter 报告 **`idle`**。
+  - 若出现 `task_complete`、`turn_aborted` 或超时（>10分钟）：Adapter 报告 **`idle`**。只有明确的 `task_complete` 允许升级为已完成；中止、超时或缺少完成证据时设置 `suppressCompletion`，不推送完成通知。
+  - 从末尾 64KB 开始读取，缺少生命周期事件时扩大窗口，直到读到 `task_started` / `task_complete` / `turn_aborted` 或文件开头；忽略末尾尚未换行的记录，避免超长工具输出或写入中的 JSON 丢失运行状态。
   - **定时任务（automation）**：每次运行同样是 `task_started` → `task_complete`，最后一条助手消息以 `<heartbeat>` 开头（内含 `<decision>DONT_NOTIFY</decision>` 等）。Adapter 对这类回合设置 `suppressCompletion`，`SessionStore` 不会升级为 completed，也不发通知；detail 置空，不显示原始 XML。
   - **`session_meta`** 是文件第一行，可能远超尾部 64KB 窗口。Adapter 单独读取第一行取 `session_id` / `cwd`，按文件路径缓存（第一行尚未写完时不缓存）。
 
