@@ -24,9 +24,14 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
 
     public let sessionsDirectory: URL
     public let projectsDirectory: URL
+    public let eventsDirectory: URL
+    public let hookReader: ClaudeHookEventReader
     public let isPidAlive: @Sendable (Int32) -> Bool
     public let maxAgeSeconds: TimeInterval
     public let waitingThreshold: TimeInterval
+
+    public var showUsage: Bool
+    public var usageTracker: UsageTracker
 
     private var transcriptCache: [String: URL] = [:]
     private let transcriptCacheLock = NSLock()
@@ -34,22 +39,31 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
     public init(
         sessionsDirectory: URL? = nil,
         projectsDirectory: URL? = nil,
+        eventsDirectory: URL? = nil,
+        hookReader: ClaudeHookEventReader? = nil,
         isPidAlive: (@Sendable (Int32) -> Bool)? = nil,
         maxAgeSeconds: TimeInterval = 24 * 3600,
-        waitingThreshold: TimeInterval = 5.0
+        waitingThreshold: TimeInterval = 5.0,
+        showUsage: Bool = true,
+        usageTracker: UsageTracker = .shared
     ) {
         let home = FileManager.default.homeDirectoryForCurrentUser
         self.sessionsDirectory = sessionsDirectory ?? home.appendingPathComponent(".claude/sessions")
         self.projectsDirectory = projectsDirectory ?? home.appendingPathComponent(".claude/projects")
+        let evDir = eventsDirectory ?? home.appendingPathComponent("Library/Application Support/AgentMonitor/events")
+        self.eventsDirectory = evDir
+        self.hookReader = hookReader ?? ClaudeHookEventReader(fileURL: evDir.appendingPathComponent("claude.tsv"))
         self.isPidAlive = isPidAlive ?? { pid in
             kill(pid, 0) == 0
         }
         self.maxAgeSeconds = maxAgeSeconds
         self.waitingThreshold = waitingThreshold
+        self.showUsage = showUsage
+        self.usageTracker = usageTracker
     }
 
     public var watchPaths: [URL] {
-        [sessionsDirectory, projectsDirectory]
+        [sessionsDirectory, projectsDirectory, eventsDirectory]
     }
 
     public func scan() throws -> [AgentSession] {
@@ -71,6 +85,7 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
 
         var results: [AgentSession] = []
         let now = Date()
+        let hookStates = hookReader.poll()
 
         for fileURL in sessionFiles {
             guard let data = try? Data(contentsOf: fileURL),
@@ -83,7 +98,7 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
                 continue
             }
 
-            let updatedAt = sessionMeta.updatedAt.map { Date(timeIntervalSince1970: Double($0) / 1000.0) }
+            var updatedAt = sessionMeta.updatedAt.map { Date(timeIntervalSince1970: Double($0) / 1000.0) }
                 ?? (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
                 ?? now
 
@@ -97,8 +112,19 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
             let sessionId = sessionMeta.sessionId
             let cwd = sessionMeta.cwd
 
-            // Locate transcript
-            let transcriptURL: URL? = locateTranscript(sessionId: sessionId, cwd: cwd, fm: fm)
+            let hookState = hookStates[sessionId]
+
+            // Locate transcript: 优先使用 hookState 中的 transcriptPath（存在且文件存在时）
+            var transcriptURL: URL? = nil
+            if let hookTranscript = hookState?.transcriptPath, !hookTranscript.isEmpty {
+                let candidateURL = URL(fileURLWithPath: hookTranscript)
+                if fm.fileExists(atPath: candidateURL.path) {
+                    transcriptURL = candidateURL
+                }
+            }
+            if transcriptURL == nil {
+                transcriptURL = locateTranscript(sessionId: sessionId, cwd: cwd, fm: fm)
+            }
 
             var resolvedTitle = sessionMeta.name?.trimmingCharacters(in: .whitespacesAndNewlines)
             if resolvedTitle?.isEmpty ?? true, let cwd = cwd {
@@ -153,6 +179,71 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
                 }
             }
 
+            var suppressCompletion = false
+
+            // Hook 状态覆盖判定
+            if let hook = hookState {
+                let thresholdDate: Date
+                if let su = sessionMeta.statusUpdatedAt {
+                    thresholdDate = Date(timeIntervalSince1970: Double(su) / 1000.0 - 1.0)
+                } else {
+                    thresholdDate = updatedAt.addingTimeInterval(-1.0)
+                }
+
+                if hook.at >= thresholdDate {
+                    switch hook.event {
+                    case "PermissionRequest":
+                        state = .waitingForUser
+                        waitingLabel = "等待授权"
+                        detail = hook.toolDetail
+                        detailIsCommand = hook.detailIsCommand
+                        if hook.at > updatedAt {
+                            updatedAt = hook.at
+                        }
+                    case "Notification":
+                        if hook.notificationType == "permission_prompt" {
+                            state = .waitingForUser
+                            waitingLabel = "等待授权"
+                            detail = hook.message
+                            detailIsCommand = false
+                            if hook.at > updatedAt {
+                                updatedAt = hook.at
+                            }
+                        } else if hook.notificationType == "elicitation_dialog" || hook.notificationType == "agent_needs_input" {
+                            state = .waitingForUser
+                            waitingLabel = "在问你"
+                            detail = hook.message
+                            detailIsCommand = false
+                            if hook.at > updatedAt {
+                                updatedAt = hook.at
+                            }
+                        }
+                    case "Stop":
+                        state = .idle
+                        // 不覆盖 detail
+                        if hook.at > updatedAt {
+                            updatedAt = hook.at
+                        }
+                    case "StopFailure":
+                        state = .idle
+                        suppressCompletion = true
+                        if hook.at > updatedAt {
+                            updatedAt = hook.at
+                        }
+                    default:
+                        // UserPromptSubmit, SessionStart, SessionEnd 等不覆盖
+                        break
+                    }
+                }
+            }
+
+            let usage: SessionUsage?
+            if showUsage, let transcriptURL = transcriptURL {
+                usage = usageTracker.claudeUsage(transcript: transcriptURL)
+            } else {
+                usage = nil
+            }
+
             let session = AgentSession(
                 id: "\(kind.rawValue):\(sessionId)",
                 kind: kind,
@@ -165,8 +256,10 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
                 detailIsCommand: detailIsCommand,
                 waitingLabel: waitingLabel,
                 entrypoint: sessionMeta.entrypoint,
+                suppressCompletion: suppressCompletion,
                 pid: Int32(sessionMeta.pid),
-                transcriptPath: transcriptURL?.path
+                transcriptPath: transcriptURL?.path,
+                usage: usage
             )
             results.append(session)
         }

@@ -15,6 +15,9 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
         var originator: String?
         var isSubagent = false
     }
+    public var showUsage: Bool
+    public var usageTracker: UsageTracker
+
     private var metaCache: [String: SessionMeta] = [:]
     private let metaCacheLock = NSLock()
 
@@ -23,13 +26,17 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
         sessionIndexURL: URL? = nil,
         isCodexRunning: (@Sendable () -> Bool)? = nil, // Kept for backwards compatibility if needed
         maxAgeSeconds: TimeInterval = 24 * 3600,
-        activeThreshold: TimeInterval = 600.0
+        activeThreshold: TimeInterval = 600.0,
+        showUsage: Bool = true,
+        usageTracker: UsageTracker = .shared
     ) {
         let home = FileManager.default.homeDirectoryForCurrentUser
         self.sessionsDirectory = sessionsDirectory ?? home.appendingPathComponent(".codex/sessions")
         self.sessionIndexURL = sessionIndexURL ?? home.appendingPathComponent(".codex/session_index.jsonl")
         self.maxAgeSeconds = maxAgeSeconds
         self.activeThreshold = activeThreshold
+        self.showUsage = showUsage
+        self.usageTracker = usageTracker
     }
 
     public var watchPaths: [URL] {
@@ -114,6 +121,8 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
                 detail = nil
             }
 
+            let usage = showUsage ? usageTracker.codexUsage(rollout: fileURL) : nil
+
             let session = AgentSession(
                 id: "\(kind.rawValue):\(nativeId)",
                 kind: kind,
@@ -127,7 +136,8 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
                 waitingLabel: waitingLabel,
                 suppressCompletion: summary.isHeartbeat || summary.lastEventType != .taskComplete,
                 transcriptPath: fileURL.path,
-                originator: meta.originator
+                originator: meta.originator,
+                usage: usage
             )
             results.append(session)
         }

@@ -7,11 +7,13 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
     public let baseDirectory: URL
     public let isLockHeld: @Sendable (String) -> Bool
     public let maxAgeSeconds: TimeInterval
+    public var showUsage: Bool
 
     public init(
         baseDirectory: URL? = nil,
         isLockHeld: (@Sendable (String) -> Bool)? = nil,
-        maxAgeSeconds: TimeInterval = 24 * 3600
+        maxAgeSeconds: TimeInterval = 24 * 3600,
+        showUsage: Bool = true
     ) {
         let home = FileManager.default.homeDirectoryForCurrentUser
         self.baseDirectory = baseDirectory ?? home.appendingPathComponent(".gemini/antigravity")
@@ -31,6 +33,7 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
             }
         }
         self.maxAgeSeconds = maxAgeSeconds
+        self.showUsage = showUsage
     }
 
     public var watchPaths: [URL] {
@@ -124,7 +127,7 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
                 detail: detail,
                 detailIsCommand: false,
                 waitingLabel: waitingLabel,
-                usage: SessionUsage(steps: row.stepCount, updatedAt: lastModified)
+                usage: showUsage ? SessionUsage(steps: row.stepCount, updatedAt: lastModified) : nil
             )
             results.append(session)
         }

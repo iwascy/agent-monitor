@@ -20,6 +20,42 @@ let codex = CodexAdapter(maxAgeSeconds: maxAge)
 let dsh = DshAdapter(maxAgeSeconds: maxAge)
 let antigravity = AntigravityAdapter(maxAgeSeconds: maxAge)
 
+func formatUsageLine(_ u: SessionUsage) -> String {
+    var parts: [String] = []
+    if let ctx = u.contextTokens {
+        let ctxStr = UsageFormatter.long(tokens: ctx)
+        if let win = u.contextWindow {
+            parts.append("ctx \(ctxStr)/\(UsageFormatter.long(tokens: win))")
+        } else {
+            parts.append("ctx \(ctxStr)")
+        }
+    }
+    if let inp = u.inputTokens {
+        parts.append("in \(UsageFormatter.long(tokens: inp))")
+    }
+    if u.cachedInputTokens != nil || u.cacheWriteTokens != nil {
+        let rStr = u.cachedInputTokens.map { UsageFormatter.long(tokens: $0) } ?? "-"
+        let wStr = u.cacheWriteTokens.map { UsageFormatter.long(tokens: $0) } ?? "-"
+        parts.append("cache r/w \(rStr)/\(wStr)")
+    }
+    if let out = u.outputTokens {
+        parts.append("out \(UsageFormatter.long(tokens: out))")
+    }
+    if let reason = u.reasoningTokens {
+        parts.append("reasoning \(UsageFormatter.long(tokens: reason))")
+    }
+    if let req = u.requestCount {
+        parts.append("requests \(req)")
+    }
+    if let steps = u.steps {
+        parts.append("steps \(steps)")
+    }
+    if let model = u.model {
+        parts.append("model \(model)")
+    }
+    return parts.joined(separator: ", ")
+}
+
 let adapters: [AgentAdapter] = [claude, codex, dsh, antigravity]
 
 for adapter in adapters {
@@ -42,6 +78,9 @@ for adapter in adapters {
             }
             print("      Last Activity: \(s.lastActivity)")
             print("      Age: \(Int(Date().timeIntervalSince(s.lastActivity)))s ago")
+            if let u = s.usage {
+                print("      Usage: \(formatUsageLine(u))")
+            }
         }
     } catch {
         print("  Error scanning \(adapter.kind): \(error)")
@@ -64,6 +103,9 @@ for (idx, s) in storeSessions.enumerated() {
     print("      State: \(s.state.rawValue)")
     print("      Detail: \(s.detail ?? "<none>")")
     print("      Last Activity: \(s.lastActivity)")
+    if let u = s.usage {
+        print("      Usage: \(formatUsageLine(u))")
+    }
 }
 print("========================================")
 

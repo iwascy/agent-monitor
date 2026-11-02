@@ -37,6 +37,25 @@ public final class SessionStore: @unchecked Sendable {
         }
     }
 
+    private var _showUsage: Bool = true
+    public var showUsage: Bool {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _showUsage
+        }
+        set {
+            lock.lock()
+            _showUsage = newValue
+            for adapter in adapters {
+                if let c = adapter as? ClaudeCodeAdapter { c.showUsage = newValue }
+                if let c = adapter as? CodexAdapter { c.showUsage = newValue }
+                if let a = adapter as? AntigravityAdapter { a.showUsage = newValue }
+            }
+            lock.unlock()
+        }
+    }
+
     private var sessionCache: [String: AgentSession] = [:]
     private var readCompletedKeys: Set<String> = [] // "\(sessionId):\(completionTimestamp)"
     private var runningStartTimes: [String: Date] = [:]
