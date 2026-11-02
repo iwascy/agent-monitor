@@ -11,7 +11,7 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
     public init(
         baseDirectory: URL? = nil,
         isLockHeld: (@Sendable (String) -> Bool)? = nil,
-        maxAgeSeconds: TimeInterval = 6 * 3600
+        maxAgeSeconds: TimeInterval = 24 * 3600
     ) {
         let home = FileManager.default.homeDirectoryForCurrentUser
         self.baseDirectory = baseDirectory ?? home.appendingPathComponent(".gemini/antigravity")
@@ -123,7 +123,8 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
                 lastActivity: lastModified,
                 detail: detail,
                 detailIsCommand: false,
-                waitingLabel: waitingLabel
+                waitingLabel: waitingLabel,
+                usage: SessionUsage(steps: row.stepCount, updatedAt: lastModified)
             )
             results.append(session)
         }
@@ -140,6 +141,7 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
         let notFullyIdle: Bool
         let killed: Bool
         let lastModified: Date?
+        let stepCount: Int
     }
 
     public struct DatabaseError: Error, CustomStringConvertible {
@@ -180,16 +182,36 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
     }
 
     private func readSummaries(dbURL: URL) throws -> [SummaryRow] {
+        let (database, _) = try openAndPrepare(dbURL: dbURL, query: "SELECT 1")
+        defer {
+            sqlite3_close(database)
+        }
+
+        var hasStepCount = false
+        var pragmaStmt: OpaquePointer?
+        if sqlite3_prepare_v2(database, "PRAGMA table_info(conversation_summaries)", -1, &pragmaStmt, nil) == SQLITE_OK, let pStmt = pragmaStmt {
+            while sqlite3_step(pStmt) == SQLITE_ROW {
+                if let nameCol = sqlite3_column_text(pStmt, 1), String(cString: nameCol) == "step_count" {
+                    hasStepCount = true
+                    break
+                }
+            }
+            sqlite3_finalize(pStmt)
+        }
+
+        let stepExpr = hasStepCount ? "step_count" : "0 AS step_count"
         let query = """
-        SELECT conversation_id, title, preview, workspace_uris, status, not_fully_idle, killed, last_modified_time
+        SELECT conversation_id, title, preview, workspace_uris, status, not_fully_idle, killed, last_modified_time, \(stepExpr)
         FROM conversation_summaries
         ORDER BY last_modified_time DESC
         """
 
-        let (database, statement) = try openAndPrepare(dbURL: dbURL, query: query)
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, query, -1, &statement, nil) == SQLITE_OK, let stmt = statement else {
+            throw DatabaseError(description: "conversation_summaries.db: \(String(cString: sqlite3_errmsg(database)))")
+        }
         defer {
-            sqlite3_finalize(statement)
-            sqlite3_close(database)
+            sqlite3_finalize(stmt)
         }
 
         var rows: [SummaryRow] = []
@@ -232,6 +254,8 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
                     ?? fallbackFormatterSimple.date(from: s)
             }
 
+            let stepCount = Int(sqlite3_column_int(statement, 8))
+
             // If date parsing fails, modDate remains nil, row will be skipped in scan()
             rows.append(SummaryRow(
                 conversationId: convId,
@@ -241,7 +265,8 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
                 status: status,
                 notFullyIdle: notIdle,
                 killed: killed,
-                lastModified: modDate
+                lastModified: modDate,
+                stepCount: stepCount
             ))
         }
         guard rc == SQLITE_DONE else {

@@ -8,7 +8,34 @@ public enum SessionTransition: Sendable, Equatable {
 
 public final class SessionStore: @unchecked Sendable {
     public let adapters: [AgentAdapter]
-    public let maxAgeSeconds: TimeInterval
+
+    private var _maxAgeSeconds: TimeInterval
+    public var maxAgeSeconds: TimeInterval {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _maxAgeSeconds
+        }
+        set {
+            lock.lock()
+            _maxAgeSeconds = newValue
+            lock.unlock()
+        }
+    }
+
+    private var _disabledKinds: Set<AgentKind> = []
+    public var disabledKinds: Set<AgentKind> {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _disabledKinds
+        }
+        set {
+            lock.lock()
+            _disabledKinds = newValue
+            lock.unlock()
+        }
+    }
 
     private var sessionCache: [String: AgentSession] = [:]
     private var readCompletedKeys: Set<String> = [] // "\(sessionId):\(completionTimestamp)"
@@ -53,7 +80,7 @@ public final class SessionStore: @unchecked Sendable {
         pollingInterval: TimeInterval = 15.0
     ) {
         self.adapters = adapters
-        self.maxAgeSeconds = maxAgeSeconds
+        self._maxAgeSeconds = maxAgeSeconds
         self.pollingInterval = pollingInterval
 
         // Set up file watcher
@@ -201,7 +228,13 @@ public final class SessionStore: @unchecked Sendable {
 
         var scannedSessions: [String: AgentSession] = [:]
         var successfulAdapters: Set<AgentKind> = []
+        let currentDisabledKinds = _disabledKinds
+        let currentMaxAge = _maxAgeSeconds
+
         for adapter in adapters {
+            if currentDisabledKinds.contains(adapter.kind) {
+                continue
+            }
             do {
                 let list = try adapter.scan()
                 for item in list {
@@ -217,6 +250,14 @@ public final class SessionStore: @unchecked Sendable {
         var hasContentChanges = false
         let now = Date()
 
+        // 0. Remove sessions from disabled adapters (without notifying)
+        for (id, existing) in sessionCache {
+            if currentDisabledKinds.contains(existing.kind) {
+                sessionCache.removeValue(forKey: id)
+                hasContentChanges = true
+            }
+        }
+
         // 1. Detect removed sessions (or older than maxAge)
         for (id, existing) in sessionCache {
             // Retain existing sessions if their adapter failed to scan in this round
@@ -225,7 +266,7 @@ public final class SessionStore: @unchecked Sendable {
             }
 
             if let fresh = scannedSessions[id] {
-                if now.timeIntervalSince(fresh.lastActivity) > maxAgeSeconds {
+                if now.timeIntervalSince(fresh.lastActivity) > currentMaxAge {
                     sessionCache.removeValue(forKey: id)
                     transitions.append(.removed(id: id))
                     hasContentChanges = true
@@ -239,7 +280,7 @@ public final class SessionStore: @unchecked Sendable {
 
         // 2. Detect added or modified sessions
         for (id, var fresh) in scannedSessions {
-            if now.timeIntervalSince(fresh.lastActivity) > maxAgeSeconds {
+            if now.timeIntervalSince(fresh.lastActivity) > currentMaxAge {
                 continue
             }
 

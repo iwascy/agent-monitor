@@ -28,11 +28,14 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
     public let maxAgeSeconds: TimeInterval
     public let waitingThreshold: TimeInterval
 
+    private var transcriptCache: [String: URL] = [:]
+    private let transcriptCacheLock = NSLock()
+
     public init(
         sessionsDirectory: URL? = nil,
         projectsDirectory: URL? = nil,
         isPidAlive: (@Sendable (Int32) -> Bool)? = nil,
-        maxAgeSeconds: TimeInterval = 6 * 3600,
+        maxAgeSeconds: TimeInterval = 24 * 3600,
         waitingThreshold: TimeInterval = 5.0
     ) {
         let home = FileManager.default.homeDirectoryForCurrentUser
@@ -95,14 +98,7 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
             let cwd = sessionMeta.cwd
 
             // Locate transcript
-            let transcriptURL: URL?
-            if let cwd = cwd {
-                let slug = cwd.replacingOccurrences(of: "/", with: "-")
-                let candidate = projectsDirectory.appendingPathComponent(slug).appendingPathComponent("\(sessionId).jsonl")
-                transcriptURL = fm.fileExists(atPath: candidate.path) ? candidate : nil
-            } else {
-                transcriptURL = nil
-            }
+            let transcriptURL: URL? = locateTranscript(sessionId: sessionId, cwd: cwd, fm: fm)
 
             var resolvedTitle = sessionMeta.name?.trimmingCharacters(in: .whitespacesAndNewlines)
             if resolvedTitle?.isEmpty ?? true, let cwd = cwd {
@@ -168,12 +164,50 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
                 detail: detail,
                 detailIsCommand: detailIsCommand,
                 waitingLabel: waitingLabel,
-                entrypoint: sessionMeta.entrypoint
+                entrypoint: sessionMeta.entrypoint,
+                pid: Int32(sessionMeta.pid),
+                transcriptPath: transcriptURL?.path
             )
             results.append(session)
         }
 
         return results
+    }
+
+    private func locateTranscript(sessionId: String, cwd: String?, fm: FileManager) -> URL? {
+        transcriptCacheLock.lock()
+        if let cached = transcriptCache[sessionId], fm.fileExists(atPath: cached.path) {
+            transcriptCacheLock.unlock()
+            return cached
+        }
+        transcriptCacheLock.unlock()
+
+        if let cwd = cwd {
+            // Replace any non-alphanumeric character with "-"
+            let slug = cwd.replacingOccurrences(of: "[^A-Za-z0-9]", with: "-", options: .regularExpression)
+            let candidate = projectsDirectory.appendingPathComponent(slug).appendingPathComponent("\(sessionId).jsonl")
+            if fm.fileExists(atPath: candidate.path) {
+                transcriptCacheLock.lock()
+                transcriptCache[sessionId] = candidate
+                transcriptCacheLock.unlock()
+                return candidate
+            }
+        }
+
+        // Fallback: search in projectsDirectory/*/sessionId.jsonl
+        if let subdirs = try? fm.contentsOfDirectory(at: projectsDirectory, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
+            for dir in subdirs {
+                let candidate = dir.appendingPathComponent("\(sessionId).jsonl")
+                if fm.fileExists(atPath: candidate.path) {
+                    transcriptCacheLock.lock()
+                    transcriptCache[sessionId] = candidate
+                    transcriptCacheLock.unlock()
+                    return candidate
+                }
+            }
+        }
+
+        return nil
     }
 
     private struct TranscriptSummary {

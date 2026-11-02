@@ -21,7 +21,7 @@ public final class DshAdapter: AgentAdapter, @unchecked Sendable {
         sessionsDirectory: URL? = nil,
         zstdExecutablePath: String = "/opt/homebrew/bin/zstd",
         isLockHeld: (@Sendable (String) -> Bool)? = nil,
-        maxAgeSeconds: TimeInterval = 6 * 3600
+        maxAgeSeconds: TimeInterval = 24 * 3600
     ) {
         let home = FileManager.default.homeDirectoryForCurrentUser
         self.sessionsDirectory = sessionsDirectory ?? home.appendingPathComponent(".dsh/sessions")

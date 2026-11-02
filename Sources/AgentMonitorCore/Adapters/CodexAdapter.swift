@@ -12,6 +12,7 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
     private struct SessionMeta {
         var sessionId: String?
         var cwd: String?
+        var originator: String?
         var isSubagent = false
     }
     private var metaCache: [String: SessionMeta] = [:]
@@ -21,7 +22,7 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
         sessionsDirectory: URL? = nil,
         sessionIndexURL: URL? = nil,
         isCodexRunning: (@Sendable () -> Bool)? = nil, // Kept for backwards compatibility if needed
-        maxAgeSeconds: TimeInterval = 6 * 3600,
+        maxAgeSeconds: TimeInterval = 24 * 3600,
         activeThreshold: TimeInterval = 600.0
     ) {
         let home = FileManager.default.homeDirectoryForCurrentUser
@@ -124,7 +125,9 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
                 detail: detail,
                 detailIsCommand: detailIsCommand,
                 waitingLabel: waitingLabel,
-                suppressCompletion: summary.isHeartbeat || summary.lastEventType != .taskComplete
+                suppressCompletion: summary.isHeartbeat || summary.lastEventType != .taskComplete,
+                transcriptPath: fileURL.path,
+                originator: meta.originator
             )
             results.append(session)
         }
@@ -151,6 +154,7 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
            let p = json["payload"] as? [String: Any] {
             result.sessionId = p["id"] as? String ?? p["session_id"] as? String
             result.cwd = p["cwd"] as? String
+            result.originator = p["originator"] as? String
             result.isSubagent = (p["source"] as? [String: Any])?["subagent"] != nil
                 || p["source"] as? String == "subagent"
                 || p["parent_thread_id"] as? String != nil
