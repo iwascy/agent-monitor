@@ -15,7 +15,13 @@ public final class MonitorViewModel: ObservableObject {
     @Published public private(set) var isLaunchAtLogin: Bool = false
 
     @Published public var isIdleExpanded: Bool = false
-    @Published public var filterState: SessionState? = nil
+    @Published public var filterState: SessionState? = nil {
+        didSet {
+            if let sel = keyboardSelectionID, !visibleSessionIDs.contains(sel) {
+                keyboardSelectionID = nil
+            }
+        }
+    }
     @Published public var keyboardSelectionID: String? = nil
     @Published public var hasOverdue: Bool = false
 
@@ -755,8 +761,8 @@ public final class MonitorViewModel: ObservableObject {
             return true
         }
 
-        // ↩ (Return, keyCode 36)
-        if event.keyCode == 36 {
+        // ↩ (Return, keyCode 36 / Keypad Enter, keyCode 76)
+        if event.keyCode == 36 || event.keyCode == 76 {
             activateCurrentSelection()
             return true
         }

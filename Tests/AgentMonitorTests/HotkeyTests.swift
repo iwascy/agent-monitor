@@ -252,4 +252,73 @@ struct HotkeyTests {
         #expect(HotkeyCenter.selectJumpWaitingTarget(from: [], muteRules: []) == nil)
         #expect(HotkeyCenter.selectJumpWaitingTarget(from: [running, idle], muteRules: []) == nil)
     }
+
+    // MARK: - 4. Keypad Enter and Filter Selection Cleared Tests
+
+    @Test("Keypad Enter (keyCode 76) triggers activation")
+    func testKeypadEnterActivatesSelection() {
+        let store = SessionStore(adapters: [])
+        let vm = MonitorViewModel(sessionStore: store)
+        let s1 = makeSession(id: "s1", state: .waitingForUser)
+        vm.updateSessionsManually([s1])
+
+        vm.keyboardSelectionID = "s1"
+
+        let keypadEnterEvent = NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: "\r",
+            charactersIgnoringModifiers: "\r",
+            isARepeat: false,
+            keyCode: 76
+        )!
+
+        let handled = vm.handleKeyEvent(keypadEnterEvent)
+        #expect(handled == true)
+    }
+
+    @Test("Disappeared selection when filtered clears keyboardSelectionID")
+    func testFilterClearsSelectedID() {
+        let store = SessionStore(adapters: [])
+        let vm = MonitorViewModel(sessionStore: store)
+        let s1 = makeSession(id: "s1", state: .waitingForUser)
+        let s2 = makeSession(id: "s2", state: .completed)
+        vm.updateSessionsManually([s1, s2])
+
+        vm.keyboardSelectionID = "s2"
+        #expect(vm.keyboardSelectionID == "s2")
+
+        // 切换为 waiting 过滤，s2 被过滤掉，keyboardSelectionID 应被清空
+        vm.filterState = .waitingForUser
+        #expect(vm.keyboardSelectionID == nil)
+    }
+
+    @Test("KeyRecorderView captures Command key combinations during recording")
+    func testKeyRecorderInterceptsCommand() {
+        let view = KeyRecorderNSView()
+        _ = view.becomeFirstResponder()
+        #expect(view.isRecording == true)
+
+        let cmdWEvent = NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [.command],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: "w",
+            charactersIgnoringModifiers: "w",
+            isARepeat: false,
+            keyCode: UInt16(kVK_ANSI_W)
+        )!
+
+        let handled = view.performKeyEquivalent(with: cmdWEvent)
+        #expect(handled == true)
+        #expect(view.isRecording == false)
+        #expect(view.keyCombo?.keyCode == UInt32(kVK_ANSI_W))
+    }
 }

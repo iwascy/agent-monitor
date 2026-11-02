@@ -29,7 +29,7 @@ public final class FocusStrategies {
         return collapsed.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
-    public func focusTerminal(host: HostInfo, titleHint: String?, cwd: String?) {
+    public func focusTerminal(host: HostInfo, titleHint: String?, cwd: String?) async {
         let bundleId = host.app.bundleIdentifier ?? ""
 
         // 1. AppleScript for iTerm2 and Apple Terminal if tty is known
@@ -77,7 +77,7 @@ public final class FocusStrategies {
             }
 
             if let scriptText = script {
-                let success = runAppleScriptWithTimeout(scriptText, timeout: 2.0, bundleId: bundleId)
+                let success = await runAppleScriptWithTimeout(scriptText, bundleId: bundleId)
                 if success {
                     return
                 }
@@ -211,38 +211,49 @@ public final class FocusStrategies {
                   .replacingOccurrences(of: "\"", with: "\\\"")
     }
 
-    private func runAppleScriptWithTimeout(_ source: String, timeout: TimeInterval, bundleId: String) -> Bool {
-        final class ResultBox: @unchecked Sendable {
-            var success = false
-            var wasDenied = false
-        }
-        let box = ResultBox()
-        let group = DispatchGroup()
+    private func runAppleScriptWithTimeout(_ source: String, bundleId: String) async -> Bool {
+        await withTaskGroup(of: Bool.self) { group in
+            // AppleScript 脚本放进后台 Task
+            group.addTask {
+                let (success, wasDenied) = await Task.detached(priority: .userInitiated) { () -> (Bool, Bool) in
+                    var errorInfo: NSDictionary?
+                    let appleScript = NSAppleScript(source: source)
+                    let resultDesc = appleScript?.executeAndReturnError(&errorInfo)
+                    var denied = false
+                    var ok = false
+                    if let error = errorInfo {
+                        let code = (error[NSAppleScript.errorNumber] as? NSNumber)?.intValue ?? 0
+                        if code == -1743 { // errAEEventNotPermitted
+                            denied = true
+                        }
+                    } else if let result = resultDesc, result.booleanValue {
+                        ok = true
+                    }
+                    return (ok, denied)
+                }.value
 
-        group.enter()
-        DispatchQueue.global(qos: .userInitiated).async {
-            var errorInfo: NSDictionary?
-            let appleScript = NSAppleScript(source: source)
-            let resultDesc = appleScript?.executeAndReturnError(&errorInfo)
-            if let error = errorInfo {
-                let code = (error[NSAppleScript.errorNumber] as? NSNumber)?.intValue ?? 0
-                if code == -1743 { // errAEEventNotPermitted
-                    box.wasDenied = true
+                if wasDenied {
+                    _ = await MainActor.run {
+                        self.deniedAppleScriptHosts.insert(bundleId)
+                    }
                 }
-            } else if let result = resultDesc, result.booleanValue {
-                box.success = true
+                return success
             }
-            group.leave()
-        }
 
-        let waitResult = group.wait(timeout: .now() + timeout)
-        if box.wasDenied {
-            deniedAppleScriptHosts.insert(bundleId)
+            // 超时 Task: 2 秒与脚本竞速，避免主线程冻结 UI
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                return false
+            }
+
+            let result = await group.next() ?? false
+            group.cancelAll()
+            return result
         }
-        return waitResult == .success && box.success
     }
 
     private func notifyAccessibilityPermissionIfNeeded() {
+        guard Bundle.main.bundleIdentifier != nil else { return }
         guard !hasNotifiedAccessibilityPermission else { return }
         hasNotifiedAccessibilityPermission = true
 

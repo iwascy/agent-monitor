@@ -7,6 +7,7 @@ struct SessionRow: View {
     @ObservedObject var viewModel: MonitorViewModel
     @Environment(\.colorScheme) private var colorScheme
     @LocalState private var isHovered = false
+    private static var lastScreenMouseLocation: CGPoint? = nil
 
     var body: some View {
         let isSelected = session.id == viewModel.keyboardSelectionID
@@ -71,10 +72,20 @@ struct SessionRow: View {
         }
         .buttonStyle(.plain)
         .accessibilityValue(isSelected ? "已选中" : "")
-        .onHover { hovering in
-            isHovered = hovering
-            if hovering {
-                viewModel.keyboardSelectionID = nil
+        .onContinuousHover { phase in
+            switch phase {
+            case .active(_):
+                isHovered = true
+                let screenLoc = NSEvent.mouseLocation
+                if let last = Self.lastScreenMouseLocation, last == screenLoc {
+                    return
+                }
+                Self.lastScreenMouseLocation = screenLoc
+                if viewModel.keyboardSelectionID != nil {
+                    viewModel.keyboardSelectionID = nil
+                }
+            case .ended:
+                isHovered = false
             }
         }
         .contextMenu {

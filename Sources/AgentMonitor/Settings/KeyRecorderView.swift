@@ -49,6 +49,7 @@ public struct KeyRecorderView: NSViewRepresentable {
 @MainActor
 public final class KeyRecorderNSView: NSView {
     weak var coordinator: KeyRecorderView.Coordinator?
+    private var windowObservers: [NSObjectProtocol] = []
 
     public var isRecording: Bool = false {
         didSet {
@@ -76,6 +77,12 @@ public final class KeyRecorderNSView: NSView {
         setupAccessibility()
     }
 
+    isolated deinit {
+        for obs in windowObservers {
+            NotificationCenter.default.removeObserver(obs)
+        }
+    }
+
     private func setupAccessibility() {
         setAccessibilityElement(true)
         setAccessibilityRole(.button)
@@ -97,6 +104,49 @@ public final class KeyRecorderNSView: NSView {
         return NSSize(width: max(width, 76), height: 24)
     }
 
+    public func cancelRecording() {
+        guard isRecording else { return }
+        isRecording = false
+        HotkeyCenter.shared.resume()
+        window?.makeFirstResponder(nil)
+    }
+
+    override public func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        cancelRecording()
+        removeWindowObservers()
+    }
+
+    override public func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        setupWindowObservers()
+    }
+
+    private func setupWindowObservers() {
+        removeWindowObservers()
+        guard let win = window else { return }
+
+        let center = NotificationCenter.default
+        let obs1 = center.addObserver(forName: NSWindow.didResignKeyNotification, object: win, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.cancelRecording()
+            }
+        }
+        let obs2 = center.addObserver(forName: NSWindow.willCloseNotification, object: win, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.cancelRecording()
+            }
+        }
+        windowObservers = [obs1, obs2]
+    }
+
+    private func removeWindowObservers() {
+        for obs in windowObservers {
+            NotificationCenter.default.removeObserver(obs)
+        }
+        windowObservers.removeAll()
+    }
+
     override public func becomeFirstResponder() -> Bool {
         let ok = super.becomeFirstResponder()
         if ok && !isRecording {
@@ -113,6 +163,14 @@ public final class KeyRecorderNSView: NSView {
             HotkeyCenter.shared.resume()
         }
         return ok
+    }
+
+    override public func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard isRecording else {
+            return super.performKeyEquivalent(with: event)
+        }
+        keyDown(with: event)
+        return true
     }
 
     override public func mouseDown(with event: NSEvent) {

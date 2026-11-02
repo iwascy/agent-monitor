@@ -104,7 +104,9 @@ public final class SessionJumper {
         let tgt = target(for: session)
         switch tgt {
         case .terminal(let host, let windowHint):
-            FocusStrategies.shared.focusTerminal(host: host, titleHint: windowHint, cwd: session.cwd)
+            Task { @MainActor in
+                await FocusStrategies.shared.focusTerminal(host: host, titleHint: windowHint, cwd: session.cwd)
+            }
         case .editor(let bundleId, let folder):
             FocusStrategies.shared.focusEditor(bundleId: bundleId, folder: folder)
         case .app(let bundleId):
@@ -112,7 +114,25 @@ public final class SessionJumper {
         }
     }
 
+    private struct TargetDescCacheEntry {
+        let description: String?
+        let timestamp: Date
+    }
+
+    private var targetDescCache: [String: TargetDescCacheEntry] = [:]
+    private let targetDescTTL: TimeInterval = 5.0
+
     public func describeTarget(for session: AgentSession) -> String? {
+        let now = Date()
+        if let entry = targetDescCache[session.id], now.timeIntervalSince(entry.timestamp) < targetDescTTL {
+            return entry.description
+        }
+        let desc = computeDescribeTarget(for: session)
+        targetDescCache[session.id] = TargetDescCacheEntry(description: desc, timestamp: now)
+        return desc
+    }
+
+    private func computeDescribeTarget(for session: AgentSession) -> String? {
         let tgt = target(for: session)
         switch tgt {
         case .terminal(let host, let windowHint):

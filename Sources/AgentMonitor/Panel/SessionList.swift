@@ -30,10 +30,12 @@ struct SessionList: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 6) {
-                    let waitingSessions = viewModel.sessions.filter { $0.state == .waitingForUser }
-                    let doneSessions = viewModel.sessions.filter { $0.state == .completed }
-                    let runningSessions = viewModel.sessions.filter { $0.state == .running }
-                    let idleSessions = viewModel.sessions.filter { $0.state == .idle }
+                    let visibleIDs = Set(viewModel.visibleSessionIDs)
+                    let waitingSessions = viewModel.sessions.filter { $0.state == .waitingForUser && visibleIDs.contains($0.id) }
+                    let doneSessions = viewModel.sessions.filter { $0.state == .completed && visibleIDs.contains($0.id) }
+                    let runningSessions = viewModel.sessions.filter { $0.state == .running && visibleIDs.contains($0.id) }
+                    let idleSessions = viewModel.sessions.filter { $0.state == .idle && visibleIDs.contains($0.id) }
+                    let allIdleSessions = viewModel.sessions.filter { $0.state == .idle }
 
                     if viewModel.filterState == nil || viewModel.filterState == .waitingForUser {
                         if !waitingSessions.isEmpty {
@@ -69,7 +71,7 @@ struct SessionList: View {
                     }
 
                     if viewModel.filterState == nil || viewModel.filterState == .idle {
-                        if !idleSessions.isEmpty {
+                        if !allIdleSessions.isEmpty {
                             let isExpanded = viewModel.isIdleExpanded || viewModel.filterState == .idle
                             Button(action: {
                                 withAnimation(.snappy(duration: 0.2)) {
@@ -80,7 +82,7 @@ struct SessionList: View {
                                     Circle()
                                         .fill(Color.gray)
                                         .frame(width: 6, height: 6)
-                                    Text("空闲 · \(idleSessions.count) 个会话")
+                                    Text("空闲 · \(allIdleSessions.count) 个会话")
                                         .font(.caption.weight(.semibold))
                                         .foregroundColor(.secondary)
                                     Spacer()
@@ -189,6 +191,11 @@ struct SessionList: View {
             .onChange(of: viewModel.keyboardSelectionID) { _, newID in
                 if let id = newID {
                     proxy.scrollTo(id, anchor: nil)
+                }
+            }
+            .onChange(of: viewModel.visibleSessionIDs) { _, newIDs in
+                if let id = viewModel.keyboardSelectionID, !newIDs.contains(id) {
+                    viewModel.keyboardSelectionID = nil
                 }
             }
         }

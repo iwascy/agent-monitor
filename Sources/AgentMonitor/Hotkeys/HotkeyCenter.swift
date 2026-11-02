@@ -74,7 +74,7 @@ extension KeyCombo {
                     UInt16(kUCKeyActionDisplay),
                     0,
                     UInt32(LMGetKbdType()),
-                    OptionBits(kUCKeyTranslateNoDeadKeysBit),
+                    OptionBits(1 << kUCKeyTranslateNoDeadKeysBit),
                     &keysDown,
                     4,
                     &length,
@@ -179,14 +179,14 @@ public final class HotkeyCenter: ObservableObject {
         AppSettings.shared.$hotkeyTogglePanel
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
-                self?.registerTogglePanel()
+                self?.registerAll()
             }
             .store(in: &cancellables)
 
         AppSettings.shared.$hotkeyJumpWaiting
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
-                self?.registerJumpWaiting()
+                self?.registerAll()
             }
             .store(in: &cancellables)
     }
