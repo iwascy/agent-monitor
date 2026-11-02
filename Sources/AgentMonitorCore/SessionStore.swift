@@ -64,6 +64,10 @@ public final class SessionStore: @unchecked Sendable {
         }
     }
 
+    public var claudeHookReader: ClaudeHookEventReader? {
+        adapters.compactMap { $0 as? ClaudeCodeAdapter }.first?.hookReader
+    }
+
     private var sessionCache: [String: AgentSession] = [:]
     private var readCompletedKeys: Set<String> = [] // "\(sessionId):\(completionTimestamp)"
     private var runningStartTimes: [String: Date] = [:]

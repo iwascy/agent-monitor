@@ -33,7 +33,12 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
     public var showUsage: Bool
     public var usageTracker: UsageTracker
 
-    private var transcriptCache: [String: URL] = [:]
+    private struct TranscriptCacheEntry {
+        let url: URL?
+        let timestamp: Date
+    }
+
+    private var transcriptCache: [String: TranscriptCacheEntry] = [:]
     private let transcriptCacheLock = NSLock()
 
     public init(
@@ -190,7 +195,7 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
                     thresholdDate = updatedAt.addingTimeInterval(-1.0)
                 }
 
-                if hook.at >= thresholdDate {
+                if hook.at > thresholdDate {
                     switch hook.event {
                     case "PermissionRequest":
                         state = .waitingForUser
@@ -268,10 +273,21 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
     }
 
     private func locateTranscript(sessionId: String, cwd: String?, fm: FileManager) -> URL? {
+        let now = Date()
         transcriptCacheLock.lock()
-        if let cached = transcriptCache[sessionId], fm.fileExists(atPath: cached.path) {
-            transcriptCacheLock.unlock()
-            return cached
+        if let entry = transcriptCache[sessionId] {
+            if let cachedURL = entry.url {
+                if fm.fileExists(atPath: cachedURL.path) {
+                    transcriptCacheLock.unlock()
+                    return cachedURL
+                }
+            } else {
+                // negative cache TTL: 约 30 秒
+                if now.timeIntervalSince(entry.timestamp) < 30.0 {
+                    transcriptCacheLock.unlock()
+                    return nil
+                }
+            }
         }
         transcriptCacheLock.unlock()
 
@@ -281,7 +297,7 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
             let candidate = projectsDirectory.appendingPathComponent(slug).appendingPathComponent("\(sessionId).jsonl")
             if fm.fileExists(atPath: candidate.path) {
                 transcriptCacheLock.lock()
-                transcriptCache[sessionId] = candidate
+                transcriptCache[sessionId] = TranscriptCacheEntry(url: candidate, timestamp: now)
                 transcriptCacheLock.unlock()
                 return candidate
             }
@@ -293,13 +309,16 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
                 let candidate = dir.appendingPathComponent("\(sessionId).jsonl")
                 if fm.fileExists(atPath: candidate.path) {
                     transcriptCacheLock.lock()
-                    transcriptCache[sessionId] = candidate
+                    transcriptCache[sessionId] = TranscriptCacheEntry(url: candidate, timestamp: now)
                     transcriptCacheLock.unlock()
                     return candidate
                 }
             }
         }
 
+        transcriptCacheLock.lock()
+        transcriptCache[sessionId] = TranscriptCacheEntry(url: nil, timestamp: now)
+        transcriptCacheLock.unlock()
         return nil
     }
 

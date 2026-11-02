@@ -137,13 +137,30 @@ public final class ClaudeHookEventReader: @unchecked Sendable {
         let validData = chunk.subdata(in: 0..<lastNewlineIndex)
         fileOffset += UInt64(lastNewlineIndex + 1)
 
-        guard let text = String(data: validData, encoding: .utf8) else {
-            return states
+        // 按 0x0A 字节切行，每行单独 UTF-8 解码，单行解码失败只跳过该行
+        var lineStart = 0
+        for i in 0..<validData.count {
+            if validData[i] == 0x0A {
+                if i > lineStart {
+                    let lineBytes = validData.subdata(in: lineStart..<i)
+                    if let lineStr = String(data: lineBytes, encoding: .utf8) {
+                        let trimmed = lineStr.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !trimmed.isEmpty {
+                            parseLine(trimmed)
+                        }
+                    }
+                }
+                lineStart = i + 1
+            }
         }
-
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: true)
-        for line in lines {
-            parseLine(String(line))
+        if lineStart < validData.count {
+            let lineBytes = validData.subdata(in: lineStart..<validData.count)
+            if let lineStr = String(data: lineBytes, encoding: .utf8) {
+                let trimmed = lineStr.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    parseLine(trimmed)
+                }
+            }
         }
 
         return states

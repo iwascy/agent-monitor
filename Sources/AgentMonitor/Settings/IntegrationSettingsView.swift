@@ -4,8 +4,8 @@ import AgentMonitorCore
 
 struct IntegrationSettingsView: View {
     let sessionStore: SessionStore?
+    let hookReader: ClaudeHookEventReader?
     private let installer = ClaudeHookInstaller()
-    private let reader = ClaudeHookEventReader()
 
     @LocalState private var status: ClaudeHookInstallStatus = .notInstalled
     @LocalState private var errorMessage: String? = nil
@@ -16,8 +16,9 @@ struct IntegrationSettingsView: View {
     @LocalState private var createBackup: Bool = true
     @LocalState private var sheetError: String? = nil
 
-    init(sessionStore: SessionStore? = nil) {
+    init(sessionStore: SessionStore? = nil, hookReader: ClaudeHookEventReader? = nil) {
         self.sessionStore = sessionStore
+        self.hookReader = hookReader
     }
 
     private func refreshStatus() {
@@ -25,8 +26,8 @@ struct IntegrationSettingsView: View {
         status = installer.checkStatus()
         errorMessage = nil
 
-        _ = reader.poll()
-        if let last = reader.lastEvent {
+        let activeReader = hookReader ?? sessionStore?.claudeHookReader
+        if let last = activeReader?.lastEvent {
             let seconds = max(0, Int(Date().timeIntervalSince(last.at)))
             lastEventDesc = "最近一次事件：\(seconds) 秒前（\(last.event)）"
         } else {
@@ -93,6 +94,10 @@ struct IntegrationSettingsView: View {
                                 Text(desc)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
+                            } else if status == .invalidJSON {
+                                Text("settings.json 不是有效的 JSON，请先手动修复")
+                                    .font(.caption)
+                                    .foregroundStyle(.red)
                             } else if status == .needsRepair {
                                 Text("配置文件条目不完整或脚本缺失，请点击修复。")
                                     .font(.caption)
@@ -133,6 +138,14 @@ struct IntegrationSettingsView: View {
                                 .padding(.vertical, 3)
                                 .background(Color.orange.opacity(0.12))
                                 .clipShape(Capsule())
+                        case .invalidJSON:
+                            Text("● 配置无效")
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(.red)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(Color.red.opacity(0.12))
+                                .clipShape(Capsule())
                         }
                     }
 
@@ -165,6 +178,10 @@ struct IntegrationSettingsView: View {
                                 openInstallSheet()
                             }
                             .buttonStyle(.borderedProminent)
+                        case .invalidJSON:
+                            Button("安装") {}
+                                .disabled(true)
+                                .buttonStyle(.borderedProminent)
                         }
                     }
                 }

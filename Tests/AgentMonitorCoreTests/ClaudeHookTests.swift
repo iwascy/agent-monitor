@@ -203,7 +203,7 @@ struct ClaudeHookTests {
 
         // 1. 无效 JSON 拒绝写入
         try "Not a valid json {{{".data(using: .utf8)!.write(to: settingsURL)
-        #expect(installer.checkStatus() == .needsRepair)
+        #expect(installer.checkStatus() == .invalidJSON)
         #expect(throws: ClaudeHookInstallerError.invalidJSON) {
             try installer.install()
         }
@@ -322,5 +322,337 @@ struct ClaudeHookTests {
         sessions = try adapter.scan()
         #expect(sessions.first?.state == .idle)
         #expect(sessions.first?.suppressCompletion == true)
+    }
+
+    // MARK: - P0-4 & P1 & P2 补齐测试
+
+    @Test("ClaudeHookEventReader: 单行 UTF-8 解码失败只跳过该行，不丢弃整块有效行")
+    func testReaderCorruptedLineSkipping() throws {
+        let tempDir = createTempDir()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let tsvURL = tempDir.appendingPathComponent("claude.tsv")
+        let reader = ClaudeHookEventReader(fileURL: tsvURL)
+
+        // 第一行正常
+        let line1 = "1730530000\t{\"session_id\":\"s1\",\"hook_event_name\":\"SessionStart\"}\n"
+        var data = line1.data(using: .utf8)!
+
+        // 第二行是非法 UTF-8 字节（如 0xFF, 0xFE）
+        data.append(contentsOf: [0xFF, 0xFE, 0xFD, 0x0A])
+
+        // 第三行正常
+        let line3 = "1730530020\t{\"session_id\":\"s3\",\"hook_event_name\":\"Stop\"}\n"
+        data.append(line3.data(using: .utf8)!)
+
+        try data.write(to: tsvURL)
+
+        let states = reader.poll()
+        #expect(states.count == 2)
+        #expect(states["s1"]?.event == "SessionStart")
+        #expect(states["s3"]?.event == "Stop")
+    }
+
+    @Test("ClaudeHookInstaller: 符号链接指向的 settings.json 能安装，链接本身保持不变")
+    func testSymlinkSettingsInstall() throws {
+        let tempDir = createTempDir()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let realSettingsURL = tempDir.appendingPathComponent("real_settings.json")
+        let linkSettingsURL = tempDir.appendingPathComponent("link_settings.json")
+        let scriptURL = tempDir.appendingPathComponent("hooks/cc-event.sh")
+
+        // 真实文件初始为空字典
+        try "{}".data(using: .utf8)!.write(to: realSettingsURL)
+        // 创建软链接
+        try FileManager.default.createSymbolicLink(at: linkSettingsURL, withDestinationURL: realSettingsURL)
+
+        let installer = ClaudeHookInstaller(settingsURL: linkSettingsURL, scriptURL: scriptURL)
+        try installer.install(backup: true)
+
+        // 验证软链接依然是软链接
+        let attrs = try FileManager.default.attributesOfItem(atPath: linkSettingsURL.path)
+        #expect(attrs[.type] as? FileAttributeType == .typeSymbolicLink)
+
+        // 真实文件被正确写入了 hooks
+        let realData = try Data(contentsOf: realSettingsURL)
+        let json = try JSONSerialization.jsonObject(with: realData) as? [String: Any]
+        let hooks = json?["hooks"] as? [String: Any]
+        #expect(hooks?.count == ClaudeHookInstaller.targetEvents.count)
+
+        // 备份文件生成在真实文件同目录
+        let backupURL = tempDir.appendingPathComponent("settings.json.agentmonitor-backup")
+        #expect(FileManager.default.fileExists(atPath: backupURL.path))
+    }
+
+    @Test("ClaudeHookInstaller: 修复时的备份等于修复前的文件内容")
+    func testRepairBackupMatchesOriginal() throws {
+        let tempDir = createTempDir()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let settingsURL = tempDir.appendingPathComponent("settings.json")
+        let scriptURL = tempDir.appendingPathComponent("hooks/cc-event.sh")
+
+        let originalContent = "{\n  \"custom_setting\": \"preserve_me\"\n}"
+        let originalBytes = originalContent.data(using: .utf8)!
+        try originalBytes.write(to: settingsURL)
+
+        let installer = ClaudeHookInstaller(settingsURL: settingsURL, scriptURL: scriptURL)
+        try installer.repair(backup: true)
+
+        let backupURL = tempDir.appendingPathComponent("settings.json.agentmonitor-backup")
+        #expect(FileManager.default.fileExists(atPath: backupURL.path))
+        let backupBytes = try Data(contentsOf: backupURL)
+        #expect(backupBytes == originalBytes)
+    }
+
+    @Test("ClaudeHookInstaller: 结构错误（如 hooks 为含非对象元素的数组或 hooks[event] 非数组）时拒绝写入，文件不变")
+    func testInvalidHooksStructureRejection() throws {
+        let tempDir = createTempDir()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let settingsURL = tempDir.appendingPathComponent("settings.json")
+        let scriptURL = tempDir.appendingPathComponent("hooks/cc-event.sh")
+        let installer = ClaudeHookInstaller(settingsURL: settingsURL, scriptURL: scriptURL)
+
+        // 情况 1: hooks 是含非对象元素的数组
+        let invalidHooksContent = "{\n  \"hooks\": [\"not_an_object\", 123]\n}"
+        let invalidBytes = invalidHooksContent.data(using: .utf8)!
+        try invalidBytes.write(to: settingsURL)
+
+        #expect(throws: ClaudeHookInstallerError.unrecognizedHooksStructure) {
+            try installer.install()
+        }
+        let currentBytes1 = try Data(contentsOf: settingsURL)
+        #expect(currentBytes1 == invalidBytes)
+
+        // 情况 2: hooks[event] 不是数组
+        let invalidEventContent = "{\n  \"hooks\": {\n    \"Stop\": \"invalid_string\"\n  }\n}"
+        let invalidEventBytes = invalidEventContent.data(using: .utf8)!
+        try invalidEventBytes.write(to: settingsURL)
+
+        #expect(throws: ClaudeHookInstallerError.unrecognizedHooksStructure) {
+            try installer.install()
+        }
+        let currentBytes2 = try Data(contentsOf: settingsURL)
+        #expect(currentBytes2 == invalidEventBytes)
+    }
+
+    @Test("ClaudeHookInstaller: hooks[event] 中的非字典元素原样保留，只追加我们的 hook")
+    func testPreserveNonDictionaryEntries() throws {
+        let tempDir = createTempDir()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let settingsURL = tempDir.appendingPathComponent("settings.json")
+        let scriptURL = tempDir.appendingPathComponent("hooks/cc-event.sh")
+        let installer = ClaudeHookInstaller(settingsURL: settingsURL, scriptURL: scriptURL)
+
+        let mixedContent = """
+        {
+          "hooks": {
+            "Stop": [
+              "raw_string_entry",
+              42,
+              { "hooks": [{ "command": "echo custom" }] }
+            ]
+          }
+        }
+        """
+        try mixedContent.data(using: .utf8)!.write(to: settingsURL)
+
+        try installer.install(backup: false)
+
+        let data = try Data(contentsOf: settingsURL)
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let stopList = (json?["hooks"] as? [String: Any])?["Stop"] as? [Any]
+        #expect(stopList?.count == 4)
+        #expect(stopList?[0] as? String == "raw_string_entry")
+        #expect(stopList?[1] as? Int == 42)
+    }
+
+    @Test("ClaudeHookInstaller: 卸载没有我们条目的文件时，文件字节不变")
+    func testUninstallWithoutOurEntriesDoesNotModifyFile() throws {
+        let tempDir = createTempDir()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let settingsURL = tempDir.appendingPathComponent("settings.json")
+        let scriptURL = tempDir.appendingPathComponent("hooks/cc-event.sh")
+        let installer = ClaudeHookInstaller(settingsURL: settingsURL, scriptURL: scriptURL)
+
+        let originalContent = "{\n  \"hooks\": {\n    \"Stop\": [\n      {\"hooks\": [{\"command\": \"echo custom\"}]}\n    ]\n  }\n}"
+        let originalBytes = originalContent.data(using: .utf8)!
+        try originalBytes.write(to: settingsURL)
+
+        let mtimeBefore = try FileManager.default.attributesOfItem(atPath: settingsURL.path)[.modificationDate] as? Date
+
+        try installer.uninstall()
+
+        let currentBytes = try Data(contentsOf: settingsURL)
+        #expect(currentBytes == originalBytes)
+        let mtimeAfter = try FileManager.default.attributesOfItem(atPath: settingsURL.path)[.modificationDate] as? Date
+        #expect(mtimeBefore == mtimeAfter)
+    }
+
+    @Test("ClaudeCodeAdapter: hook 早于 statusUpdatedAt - 1s 时不覆盖状态")
+    func testHookEarlierThanStatusUpdatedAtDoesNotOverride() throws {
+        let tempDir = createTempDir()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let sessionsDir = tempDir.appendingPathComponent("sessions")
+        let projectsDir = tempDir.appendingPathComponent("projects")
+        let eventsDir = tempDir.appendingPathComponent("events")
+        try FileManager.default.createDirectory(at: sessionsDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: projectsDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: eventsDir, withIntermediateDirectories: true)
+
+        let tsvURL = eventsDir.appendingPathComponent("claude.tsv")
+        let hookReader = ClaudeHookEventReader(fileURL: tsvURL)
+
+        let adapter = ClaudeCodeAdapter(
+            sessionsDirectory: sessionsDir,
+            projectsDirectory: projectsDir,
+            eventsDirectory: eventsDir,
+            hookReader: hookReader,
+            isPidAlive: { _ in true },
+            maxAgeSeconds: 3600
+        )
+
+        let now = Date()
+        let pid = 12346
+        let sessionId = "session-time-test"
+
+        let statusUpdatedTimestamp = Int64(now.timeIntervalSince1970 * 1000)
+        let sessionJSON = """
+        {
+            "pid": \(pid),
+            "sessionId": "\(sessionId)",
+            "status": "busy",
+            "updatedAt": \(statusUpdatedTimestamp),
+            "statusUpdatedAt": \(statusUpdatedTimestamp)
+        }
+        """
+        try sessionJSON.data(using: .utf8)!.write(to: sessionsDir.appendingPathComponent("\(pid).json"))
+
+        // hook 时间早于 statusUpdatedAt - 1s
+        let hookTime = Int(now.timeIntervalSince1970) - 2
+        let line = "\(hookTime)\t{\"session_id\":\"\(sessionId)\",\"hook_event_name\":\"PermissionRequest\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"rm -rf /\"}}\n"
+        try appendLine(line, to: tsvURL)
+
+        let sessions = try adapter.scan()
+        #expect(sessions.count == 1)
+        #expect(sessions.first?.state == .running)
+    }
+
+    @Test("ClaudeCodeAdapter: UserPromptSubmit、SessionStart、SessionEnd 三种事件不覆盖状态")
+    func testNonOverridingHookEvents() throws {
+        let tempDir = createTempDir()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let sessionsDir = tempDir.appendingPathComponent("sessions")
+        let projectsDir = tempDir.appendingPathComponent("projects")
+        let eventsDir = tempDir.appendingPathComponent("events")
+        try FileManager.default.createDirectory(at: sessionsDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: projectsDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: eventsDir, withIntermediateDirectories: true)
+
+        let tsvURL = eventsDir.appendingPathComponent("claude.tsv")
+        let hookReader = ClaudeHookEventReader(fileURL: tsvURL)
+
+        let adapter = ClaudeCodeAdapter(
+            sessionsDirectory: sessionsDir,
+            projectsDirectory: projectsDir,
+            eventsDirectory: eventsDir,
+            hookReader: hookReader,
+            isPidAlive: { _ in true },
+            maxAgeSeconds: 3600
+        )
+
+        let now = Date()
+        let pid = 12347
+        let sessionId = "session-no-override-test"
+
+        let sessionJSON = """
+        {
+            "pid": \(pid),
+            "sessionId": "\(sessionId)",
+            "status": "busy",
+            "updatedAt": \(Int64(now.timeIntervalSince1970 * 1000)),
+            "statusUpdatedAt": \(Int64(now.timeIntervalSince1970 * 1000))
+        }
+        """
+        try sessionJSON.data(using: .utf8)!.write(to: sessionsDir.appendingPathComponent("\(pid).json"))
+
+        let hookTime = Int(now.timeIntervalSince1970) + 1
+        for event in ["UserPromptSubmit", "SessionStart", "SessionEnd"] {
+            let line = "\(hookTime)\t{\"session_id\":\"\(sessionId)\",\"hook_event_name\":\"\(event)\"}\n"
+            try appendLine(line, to: tsvURL)
+
+            let sessions = try adapter.scan()
+            #expect(sessions.count == 1)
+            #expect(sessions.first?.state == .running)
+        }
+    }
+
+    @Test("ClaudeCodeAdapter: adapter 优先使用 hook 里的 transcript_path")
+    func testAdapterPrefersHookTranscriptPath() throws {
+        let tempDir = createTempDir()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let sessionsDir = tempDir.appendingPathComponent("sessions")
+        let projectsDir = tempDir.appendingPathComponent("projects")
+        let eventsDir = tempDir.appendingPathComponent("events")
+        try FileManager.default.createDirectory(at: sessionsDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: projectsDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: eventsDir, withIntermediateDirectories: true)
+
+        let hookTranscriptURL = tempDir.appendingPathComponent("hook_transcript.jsonl")
+        let hookTranscriptContent = """
+        {"type":"custom-title","customTitle":"TitleFromHookTranscript"}
+        """
+        try hookTranscriptContent.data(using: .utf8)!.write(to: hookTranscriptURL)
+
+        let defaultProjectDir = projectsDir.appendingPathComponent("default-project")
+        try FileManager.default.createDirectory(at: defaultProjectDir, withIntermediateDirectories: true)
+        let defaultTranscriptURL = defaultProjectDir.appendingPathComponent("session-pref.jsonl")
+        let defaultTranscriptContent = """
+        {"type":"custom-title","customTitle":"TitleFromDefaultProject"}
+        """
+        try defaultTranscriptContent.data(using: .utf8)!.write(to: defaultTranscriptURL)
+
+        let tsvURL = eventsDir.appendingPathComponent("claude.tsv")
+        let hookReader = ClaudeHookEventReader(fileURL: tsvURL)
+
+        let adapter = ClaudeCodeAdapter(
+            sessionsDirectory: sessionsDir,
+            projectsDirectory: projectsDir,
+            eventsDirectory: eventsDir,
+            hookReader: hookReader,
+            isPidAlive: { _ in true },
+            maxAgeSeconds: 3600
+        )
+
+        let now = Date()
+        let pid = 12348
+        let sessionId = "session-pref"
+
+        let sessionJSON = """
+        {
+            "pid": \(pid),
+            "sessionId": "\(sessionId)",
+            "cwd": "\(defaultProjectDir.path)",
+            "status": "busy",
+            "updatedAt": \(Int64(now.timeIntervalSince1970 * 1000))
+        }
+        """
+        try sessionJSON.data(using: .utf8)!.write(to: sessionsDir.appendingPathComponent("\(pid).json"))
+
+        let hookTime = Int(now.timeIntervalSince1970) + 1
+        let line = "\(hookTime)\t{\"session_id\":\"\(sessionId)\",\"hook_event_name\":\"SessionStart\",\"transcript_path\":\"\(hookTranscriptURL.path)\"}\n"
+        try appendLine(line, to: tsvURL)
+
+        let sessions = try adapter.scan()
+        #expect(sessions.count == 1)
+        #expect(sessions.first?.transcriptPath == hookTranscriptURL.path)
+        #expect(sessions.first?.title == "TitleFromHookTranscript")
     }
 }

@@ -4,16 +4,20 @@ public enum ClaudeHookInstallStatus: String, Sendable, Equatable {
     case installed
     case notInstalled
     case needsRepair
+    case invalidJSON
 }
 
 public enum ClaudeHookInstallerError: LocalizedError, Equatable {
     case invalidJSON
+    case unrecognizedHooksStructure
     case writeFailed(String)
 
     public var errorDescription: String? {
         switch self {
         case .invalidJSON:
             return "settings.json 不是有效的 JSON，请先手动修复"
+        case .unrecognizedHooksStructure:
+            return "settings.json 的 hooks 结构无法识别，请先手动检查"
         case .writeFailed(let reason):
             return "写入失败：\(reason)"
         }
@@ -118,8 +122,19 @@ public final class ClaudeHookInstaller: @unchecked Sendable {
             return .notInstalled
         }
 
-        guard let data = try? Data(contentsOf: settingsURL),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        guard let data = try? Data(contentsOf: settingsURL) else {
+            return .invalidJSON
+        }
+
+        if data.isEmpty {
+            return .invalidJSON
+        }
+
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return .invalidJSON
+        }
+
+        if json.keys.contains("hooks") && !(json["hooks"] is [String: Any]) {
             return .needsRepair
         }
 
@@ -131,14 +146,17 @@ public final class ClaudeHookInstaller: @unchecked Sendable {
         var totalHookCount = 0
 
         for event in Self.targetEvents {
-            guard let entries = hooks[event] as? [[String: Any]] else {
+            guard let entries = hooks[event] as? [Any] else {
                 continue
             }
             var hasOurHook = false
-            for entry in entries {
-                if let hookList = entry["hooks"] as? [[String: Any]] {
+            for item in entries {
+                guard let entry = item as? [String: Any] else { continue }
+                if let hookList = entry["hooks"] as? [Any] {
                     for h in hookList {
-                        if let cmd = h["command"] as? String, Self.isAgentMonitorHook(command: cmd) {
+                        if let hDict = h as? [String: Any],
+                           let cmd = hDict["command"] as? String,
+                           Self.isAgentMonitorHook(command: cmd) {
                             hasOurHook = true
                             totalHookCount += 1
                         }
@@ -172,44 +190,57 @@ public final class ClaudeHookInstaller: @unchecked Sendable {
         try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
     }
 
-    /// 安装配置并写入
-    public func install(backup: Bool = true) throws {
-        try installScript()
-
+    private func parseAndValidateSettings() throws -> [String: Any] {
+        let realURL = settingsURL.resolvingSymlinksInPath()
         let fm = FileManager.default
-        var root: [String: Any] = [:]
+        guard fm.fileExists(atPath: realURL.path) else {
+            return [:]
+        }
+        let data: Data
+        do {
+            data = try Data(contentsOf: realURL)
+        } catch {
+            throw ClaudeHookInstallerError.writeFailed("无法读取 settings.json: \(error.localizedDescription)")
+        }
+        if data.isEmpty {
+            return [:]
+        }
+        guard let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            throw ClaudeHookInstallerError.invalidJSON
+        }
+        return json
+    }
 
-        if fm.fileExists(atPath: settingsURL.path) {
-            let data: Data
-            do {
-                data = try Data(contentsOf: settingsURL)
-            } catch {
-                throw ClaudeHookInstallerError.writeFailed("无法读取 settings.json: \(error.localizedDescription)")
-            }
-
-            if !data.isEmpty {
-                do {
-                    guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                        throw ClaudeHookInstallerError.invalidJSON
-                    }
-                    root = json
-                } catch {
-                    throw ClaudeHookInstallerError.invalidJSON
-                }
+    private func validateHooksStructure(in root: [String: Any]) throws {
+        guard let hooksVal = root["hooks"] else {
+            return
+        }
+        guard let hooks = hooksVal as? [String: Any] else {
+            throw ClaudeHookInstallerError.unrecognizedHooksStructure
+        }
+        for (_, val) in hooks {
+            guard val is [Any] else {
+                throw ClaudeHookInstallerError.unrecognizedHooksStructure
             }
         }
+    }
 
-        var hooks = root["hooks"] as? [String: Any] ?? [:]
+    private func addHooks(to root: [String: Any]) throws -> [String: Any] {
+        try validateHooksStructure(in: root)
+        var updatedRoot = root
+        var hooks = updatedRoot["hooks"] as? [String: Any] ?? [:]
 
         for event in Self.targetEvents {
-            var entries = hooks[event] as? [[String: Any]] ?? []
+            var entries = hooks[event] as? [Any] ?? []
 
-            // 检查是否已经存在我们的 hook
             var alreadyInstalled = false
-            for entry in entries {
-                if let hookList = entry["hooks"] as? [[String: Any]] {
+            for item in entries {
+                if let entryDict = item as? [String: Any],
+                   let hookList = entryDict["hooks"] as? [Any] {
                     for h in hookList {
-                        if let cmd = h["command"] as? String, Self.isAgentMonitorHook(command: cmd) {
+                        if let hDict = h as? [String: Any],
+                           let cmd = hDict["command"] as? String,
+                           Self.isAgentMonitorHook(command: cmd) {
                             alreadyInstalled = true
                             break
                         }
@@ -224,89 +255,127 @@ public final class ClaudeHookInstaller: @unchecked Sendable {
             hooks[event] = entries
         }
 
-        root["hooks"] = hooks
-
-        try writeSettings(root, backup: backup)
+        updatedRoot["hooks"] = hooks
+        return updatedRoot
     }
 
-    /// 卸载 hooks
-    public func uninstall() throws {
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: settingsURL.path) else {
-            return
-        }
-
-        let data: Data
-        do {
-            data = try Data(contentsOf: settingsURL)
-        } catch {
-            throw ClaudeHookInstallerError.writeFailed("无法读取 settings.json")
-        }
-
-        guard !data.isEmpty else { return }
-
-        guard var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw ClaudeHookInstallerError.invalidJSON
-        }
-
+    private func removeHooks(from root: [String: Any]) throws -> (updated: [String: Any], changed: Bool) {
+        try validateHooksStructure(in: root)
         guard let hooks = root["hooks"] as? [String: Any] else {
-            return
+            return (root, false)
         }
 
         var updatedHooks: [String: Any] = [:]
+        var hasChanges = false
 
         for (eventKey, eventVal) in hooks {
-            guard let entries = eventVal as? [[String: Any]] else {
+            guard let entries = eventVal as? [Any] else {
                 updatedHooks[eventKey] = eventVal
                 continue
             }
 
-            var cleanedEntries: [[String: Any]] = []
+            var cleanedEntries: [Any] = []
 
-            for var entry in entries {
-                if let hookList = entry["hooks"] as? [[String: Any]] {
+            for item in entries {
+                if var entryDict = item as? [String: Any],
+                   let hookList = entryDict["hooks"] as? [Any] {
                     let filtered = hookList.filter { h in
-                        guard let cmd = h["command"] as? String else { return true }
+                        guard let hDict = h as? [String: Any],
+                              let cmd = hDict["command"] as? String else {
+                            return true
+                        }
                         return !Self.isAgentMonitorHook(command: cmd)
                     }
+
+                    if filtered.count != hookList.count {
+                        hasChanges = true
+                    }
+
                     if !filtered.isEmpty {
-                        entry["hooks"] = filtered
-                        cleanedEntries.append(entry)
+                        entryDict["hooks"] = filtered
+                        cleanedEntries.append(entryDict)
                     }
                 } else {
-                    cleanedEntries.append(entry)
+                    cleanedEntries.append(item)
                 }
+            }
+
+            if cleanedEntries.count != entries.count {
+                hasChanges = true
             }
 
             if !cleanedEntries.isEmpty {
                 updatedHooks[eventKey] = cleanedEntries
+            } else if !entries.isEmpty {
+                hasChanges = true
             }
         }
 
+        var updatedRoot = root
         if updatedHooks.isEmpty {
-            root.removeValue(forKey: "hooks")
+            if !hooks.isEmpty {
+                hasChanges = true
+                updatedRoot.removeValue(forKey: "hooks")
+            }
         } else {
-            root["hooks"] = updatedHooks
+            updatedRoot["hooks"] = updatedHooks
         }
 
-        try writeSettings(root, backup: false)
+        return (updatedRoot, hasChanges)
     }
 
-    /// 修复（卸载后再安装）
+    /// 安装配置并写入
+    public func install(backup: Bool = true) throws {
+        let root = try parseAndValidateSettings()
+        let newRoot = try addHooks(to: root)
+
+        try installScript()
+        try writeSettings(newRoot, backup: backup)
+    }
+
+    /// 卸载 hooks
+    public func uninstall() throws {
+        let realURL = settingsURL.resolvingSymlinksInPath()
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: realURL.path) else {
+            return
+        }
+
+        let root = try parseAndValidateSettings()
+        guard !root.isEmpty else { return }
+
+        let (newRoot, changed) = try removeHooks(from: root)
+        guard changed else {
+            return
+        }
+
+        try writeSettings(newRoot, backup: false)
+    }
+
+    /// 修复（卸载后再安装，只备份一次原文件，只写一次）
     public func repair(backup: Bool = true) throws {
-        try uninstall()
-        try install(backup: backup)
+        let root = try parseAndValidateSettings()
+        let (cleanedRoot, _) = try removeHooks(from: root)
+        let finalRoot = try addHooks(to: cleanedRoot)
+
+        try installScript()
+        try writeSettings(finalRoot, backup: backup)
     }
 
     private func writeSettings(_ root: [String: Any], backup: Bool) throws {
+        let realURL = settingsURL.resolvingSymlinksInPath()
+        let parentDir = realURL.deletingLastPathComponent()
         let fm = FileManager.default
-        let parentDir = settingsURL.deletingLastPathComponent()
         try fm.createDirectory(at: parentDir, withIntermediateDirectories: true)
 
-        if backup && fm.fileExists(atPath: settingsURL.path) {
-            let backupURL = settingsURL.deletingLastPathComponent().appendingPathComponent("settings.json.agentmonitor-backup")
-            try? fm.removeItem(at: backupURL)
-            try? fm.copyItem(at: settingsURL, to: backupURL)
+        if backup && fm.fileExists(atPath: realURL.path) {
+            let backupURL = parentDir.appendingPathComponent("settings.json.agentmonitor-backup")
+            do {
+                let existingBytes = try Data(contentsOf: realURL)
+                try existingBytes.write(to: backupURL, options: .atomic)
+            } catch {
+                throw ClaudeHookInstallerError.writeFailed("备份 settings.json 失败: \(error.localizedDescription)")
+            }
         }
 
         let outputData: Data
@@ -319,14 +388,14 @@ public final class ClaudeHookInstaller: @unchecked Sendable {
         let tempURL = parentDir.appendingPathComponent("settings.json.tmp.\(UUID().uuidString)")
         do {
             try outputData.write(to: tempURL, options: .atomic)
-            if fm.fileExists(atPath: settingsURL.path) {
-                _ = try fm.replaceItemAt(settingsURL, withItemAt: tempURL)
-            } else {
-                try fm.moveItem(at: tempURL, to: settingsURL)
-            }
         } catch {
+            throw ClaudeHookInstallerError.writeFailed("写入临时文件失败: \(error.localizedDescription)")
+        }
+
+        if rename(tempURL.path, realURL.path) != 0 {
+            let errStr = String(cString: strerror(errno))
             try? fm.removeItem(at: tempURL)
-            throw ClaudeHookInstallerError.writeFailed("写入临时文件或原子替换失败: \(error.localizedDescription)")
+            throw ClaudeHookInstallerError.writeFailed("原子覆盖真实文件失败: \(errStr)")
         }
     }
 }
