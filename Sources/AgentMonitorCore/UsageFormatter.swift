@@ -1,6 +1,12 @@
 import Foundation
 
 public enum UsageFormatter {
+    public enum UsageLevel: Sendable, Equatable {
+        case normal
+        case warning
+        case critical
+    }
+
     /// 标签数字缩写
     public static func short(tokens: Int) -> String {
         if tokens < 1000 {
@@ -11,6 +17,10 @@ public enum UsageFormatter {
         } else if tokens < 1_000_000 {
             let val = Double(tokens) / 1000.0
             let rounded = Int(round(val))
+            if rounded >= 1000 {
+                let mVal = Double(tokens) / 1_000_000.0
+                return formatTwoDecimalsDropZero(mVal) + "M"
+            }
             return "\(rounded)k"
         } else {
             let val = Double(tokens) / 1_000_000.0
@@ -27,11 +37,32 @@ public enum UsageFormatter {
             return formatOneDecimalOrInt(val) + "k"
         } else if tokens < 1_000_000 {
             let val = Double(tokens) / 1000.0
+            let rounded = (val * 10.0).rounded() / 10.0
+            if rounded >= 1000.0 {
+                let mVal = Double(tokens) / 1_000_000.0
+                return formatTwoDecimalsDropZero(mVal) + "M"
+            }
             return formatOneDecimalOrInt(val) + "k"
         } else {
             let val = Double(tokens) / 1_000_000.0
             return formatTwoDecimalsDropZero(val) + "M"
         }
+    }
+
+    /// 根据上下文占用与百分比计算用量等级（用于高用量告警颜色）
+    /// 按显示出来的取整百分比判断：>=80% 为 warning（橙色），>=95% 为 critical（红色）
+    public static func usageLevel(usage: SessionUsage) -> UsageLevel {
+        if let tokens = usage.contextTokens, let window = usage.contextWindow, window > 0 {
+            let pct = Int(round(Double(tokens) / Double(window) * 100.0))
+            if pct >= 95 { return .critical }
+            if pct >= 80 { return .warning }
+            return .normal
+        } else if let tokens = usage.contextTokens {
+            if tokens >= 1_000_000 { return .critical }
+            if tokens >= 800_000 { return .warning }
+            return .normal
+        }
+        return .normal
     }
 
     /// 标签文字与是否为百分比

@@ -53,13 +53,26 @@ public final class UsageTracker: @unchecked Sendable {
         var lastUsage: SessionUsage?
         var lastModel: String?
         var lastFileSize: Int?
+        var lastModified: Date?
     }
 
     private var claudeCache: [String: ClaudeState] = [:]
     private var codexCache: [String: CodexState] = [:]
+    private var _readCount: Int = 0
     private let lock = NSLock()
 
     public init() {}
+
+    /// 文件读取次数统计（主要用于测试验证缓存和开关逻辑）
+    public var readCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return _readCount
+    }
+
+    private func recordRead() {
+        _readCount += 1
+    }
 
     /// 清空缓存（测试或重置时使用）
     public func reset() {
@@ -67,6 +80,7 @@ public final class UsageTracker: @unchecked Sendable {
         defer { lock.unlock() }
         claudeCache.removeAll()
         codexCache.removeAll()
+        _readCount = 0
     }
 
     // MARK: - Claude Usage
@@ -116,6 +130,7 @@ public final class UsageTracker: @unchecked Sendable {
             do {
                 if let readData = try fileHandle.read(upToCount: chunkSize), !readData.isEmpty {
                     chunk = readData
+                    recordRead()
                 } else {
                     break
                 }
@@ -127,8 +142,7 @@ public final class UsageTracker: @unchecked Sendable {
 
             if let lastNewline = buffer.lastIndex(of: UInt8(ascii: "\n")) {
                 let completeBlock = buffer[buffer.startIndex...lastNewline]
-                let text = String(decoding: completeBlock, as: UTF8.self)
-                processClaudeLines(text, state: &state)
+                processClaudeDataBlock(completeBlock, state: &state)
                 state.offset += UInt64(completeBlock.count)
                 buffer = Data(buffer[buffer.index(after: lastNewline)...])
             }
@@ -140,51 +154,60 @@ public final class UsageTracker: @unchecked Sendable {
         return state.buildUsage(updatedAt: mtime)
     }
 
-    private func processClaudeLines(_ text: String, state: inout ClaudeState) {
-        let lines = text.components(separatedBy: .newlines)
-        for line in lines {
-            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty,
-                  let data = trimmed.data(using: .utf8),
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                continue
+    private func processClaudeDataBlock(_ block: Data, state: inout ClaudeState) {
+        var start = block.startIndex
+        for i in block.indices {
+            if block[i] == 0x0A {
+                let lineData = block[start..<i]
+                start = block.index(after: i)
+                processClaudeLineData(lineData, state: &state)
             }
+        }
+        if start < block.endIndex {
+            let lineData = block[start..<block.endIndex]
+            processClaudeLineData(lineData, state: &state)
+        }
+    }
 
-            guard json["type"] as? String == "assistant" else {
-                continue
-            }
+    private func processClaudeLineData(_ lineData: Data, state: inout ClaudeState) {
+        guard !lineData.isEmpty,
+              let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+              json["type"] as? String == "assistant" else {
+            return
+        }
 
-            // 排除 isSidechain == true
-            if let isSidechain = json["isSidechain"] as? Bool, isSidechain {
-                continue
-            }
+        let isSidechain = (json["isSidechain"] as? Bool) ?? false
 
-            guard let message = json["message"] as? [String: Any],
-                  let msgId = message["id"] as? String else {
-                continue
-            }
+        guard let message = json["message"] as? [String: Any],
+              let msgId = message["id"] as? String else {
+            return
+        }
 
+        if !isSidechain {
             if let model = message["model"] as? String, !model.isEmpty {
                 state.lastModel = model
             }
+        }
 
-            guard let usage = message["usage"] as? [String: Any] else {
-                continue
-            }
+        guard let usage = message["usage"] as? [String: Any] else {
+            return
+        }
 
-            let inputTokens = usage["input_tokens"] as? Int ?? 0
-            let cacheCreation = usage["cache_creation_input_tokens"] as? Int ?? 0
-            let cacheRead = usage["cache_read_input_tokens"] as? Int ?? 0
-            let outputTokens = usage["output_tokens"] as? Int ?? 0
+        let inputTokens = usage["input_tokens"] as? Int ?? 0
+        let cacheCreation = usage["cache_creation_input_tokens"] as? Int ?? 0
+        let cacheRead = usage["cache_read_input_tokens"] as? Int ?? 0
+        let outputTokens = usage["output_tokens"] as? Int ?? 0
 
-            state.messages[msgId] = ClaudeMessageUsage(
-                inputTokens: inputTokens,
-                cacheCreationTokens: cacheCreation,
-                cacheReadTokens: cacheRead,
-                outputTokens: outputTokens
-            )
+        // sidechain 消息照常计入 messages[msgId]，只是不更新 lastNonSidechainContext 和模型名
+        state.messages[msgId] = ClaudeMessageUsage(
+            inputTokens: inputTokens,
+            cacheCreationTokens: cacheCreation,
+            cacheReadTokens: cacheRead,
+            outputTokens: outputTokens
+        )
 
-            // 当前上下文 = 最后一条 isSidechain != true 的 assistant 消息的 input_tokens + cache_creation + cache_read
+        // 仅非 sidechain 消息更新 lastNonSidechainContext
+        if !isSidechain {
             let context = inputTokens + cacheCreation + cacheRead
             state.lastNonSidechainContext = context
         }
@@ -209,7 +232,17 @@ public final class UsageTracker: @unchecked Sendable {
 
         var state = codexCache[path] ?? CodexState()
 
+        // P1-21: 文件大小和 mtime 都没变时，直接返回 state.lastUsage，避免每秒重读 64KB
+        if let lastSize = state.lastFileSize,
+           let lastMtime = state.lastModified,
+           lastSize == currentSize,
+           lastMtime == mtime,
+           let cached = state.lastUsage {
+            return cached
+        }
+
         // 读取尾部 64KB
+        recordRead()
         guard let lines = FileUtils.readTailLines(fileURL: rollout, maxBytes: 65536) else {
             return state.lastUsage
         }
@@ -228,10 +261,10 @@ public final class UsageTracker: @unchecked Sendable {
             }
 
             guard let data = trimmed.data(using: .utf8),
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  json["type"] as? String == "event_msg",
-                  let payload = json["payload"] as? [String: Any],
-                  payload["type"] as? String == "token_count" else {
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              json["type"] as? String == "event_msg",
+              let payload = json["payload"] as? [String: Any],
+              payload["type"] as? String == "token_count" else {
                 continue
             }
 
@@ -241,15 +274,37 @@ public final class UsageTracker: @unchecked Sendable {
             }
         }
 
+        // P1-19: Codex 缓存里还没有模型名时，从文件末尾按 1MB 一块往前流式扫描，找到最后一个 "model":"..." 后缓存起来
+        if latestModel == nil {
+            if let model = scanCodexModelBackwards(fileURL: rollout, fileSize: currentSize) {
+                latestModel = model
+                state.lastModel = model
+            }
+        }
+
         if let info = latestTokenCountInfo {
             let total = info["total_token_usage"] as? [String: Any]
             let last = info["last_token_usage"] as? [String: Any]
             let window = info["model_context_window"] as? Int
 
+            // P2-19: inputTokens 改为 input_tokens - cached_input_tokens
+            let rawInput = total?["input_tokens"] as? Int
+            let cachedInput = total?["cached_input_tokens"] as? Int
+            let netInput: Int?
+            if let rawInput = rawInput {
+                if let cachedInput = cachedInput {
+                    netInput = max(0, rawInput - cachedInput)
+                } else {
+                    netInput = rawInput
+                }
+            } else {
+                netInput = nil
+            }
+
             let usage = SessionUsage(
                 model: latestModel,
-                inputTokens: total?["input_tokens"] as? Int,
-                cachedInputTokens: total?["cached_input_tokens"] as? Int,
+                inputTokens: netInput,
+                cachedInputTokens: cachedInput,
                 cacheWriteTokens: nil,
                 outputTokens: total?["output_tokens"] as? Int,
                 reasoningTokens: total?["reasoning_output_tokens"] as? Int,
@@ -263,6 +318,7 @@ public final class UsageTracker: @unchecked Sendable {
             state.lastUsage = usage
             state.lastModel = latestModel
             state.lastFileSize = currentSize
+            state.lastModified = mtime
             codexCache[path] = state
             return usage
         } else if var cachedUsage = state.lastUsage {
@@ -273,10 +329,87 @@ public final class UsageTracker: @unchecked Sendable {
             }
             cachedUsage.updatedAt = mtime
             state.lastUsage = cachedUsage
+            state.lastFileSize = currentSize
+            state.lastModified = mtime
             codexCache[path] = state
             return cachedUsage
         }
 
+        state.lastFileSize = currentSize
+        state.lastModified = mtime
+        if let latestModel = latestModel {
+            state.lastModel = latestModel
+        }
+        codexCache[path] = state
+
+        return nil
+    }
+
+    /// 从文件末尾按 1MB 一块往前流式扫描，寻找最后一个出现且有效的 model
+    private func scanCodexModelBackwards(fileURL: URL, fileSize: Int) -> String? {
+        guard fileSize > 0,
+              let fileHandle = try? FileHandle(forReadingFrom: fileURL) else {
+            return nil
+        }
+        defer { try? fileHandle.close() }
+
+        let chunkSize = 1024 * 1024 // 1 MB
+        var currentEnd = fileSize
+        var remainingBytes = Data()
+
+        while currentEnd > 0 {
+            let start = max(0, currentEnd - chunkSize)
+            let length = currentEnd - start
+            do {
+                try fileHandle.seek(toOffset: UInt64(start))
+                guard let chunk = try fileHandle.read(upToCount: length), !chunk.isEmpty else {
+                    break
+                }
+                recordRead()
+
+                var data = chunk
+                if !remainingBytes.isEmpty {
+                    data.append(remainingBytes)
+                    remainingBytes.removeAll()
+                }
+
+                // 按 0x0A 字节切行
+                var linesData: [Data] = []
+                var lineStart = data.startIndex
+                var foundFirstNewline = false
+
+                for i in data.indices {
+                    if data[i] == 0x0A {
+                        if !foundFirstNewline && start > 0 {
+                            // 非开头分块的第一个 0x0A 之前属于截断行，保留给前一个分块
+                            remainingBytes = Data(data[data.startIndex..<i])
+                            lineStart = data.index(after: i)
+                            foundFirstNewline = true
+                        } else {
+                            linesData.append(Data(data[lineStart..<i]))
+                            lineStart = data.index(after: i)
+                        }
+                    }
+                }
+                if lineStart < data.endIndex {
+                    linesData.append(Data(data[lineStart..<data.endIndex]))
+                }
+
+                // 倒序寻找最后一个出现的 model
+                for lineData in linesData.reversed() {
+                    guard let lineStr = String(data: lineData, encoding: .utf8) else { continue }
+                    let trimmed = lineStr.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmed.isEmpty, trimmed.contains("\"model\"") else { continue }
+                    if let model = extractCodexModel(from: trimmed) {
+                        return model
+                    }
+                }
+
+                currentEnd = start
+            } catch {
+                break
+            }
+        }
         return nil
     }
 

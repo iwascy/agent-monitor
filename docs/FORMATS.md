@@ -174,13 +174,15 @@
 
 ### 8.1 Claude Code
 - **数据源**：`~/.claude/projects/<slug>/<sessionId>.jsonl`
-- **聚合规则**：按 `message.id` 去重；排除 `isSidechain == true`；去重后的消息累计求和 `inputTokens`、`cachedInputTokens`、`cacheWriteTokens`、`outputTokens`。
-- **当前上下文**：取最后一条非 sidechain assistant 消息的 `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`。
+- **聚合规则**：按 `message.id` 去重。`isSidechain == true` 的消息照常计入累计用量（`messages[msgId]`）与请求数，但**不更新**当前上下文（`contextTokens`）和模型名。去重后的消息累计求和 `inputTokens`、`cachedInputTokens`、`cacheWriteTokens`、`outputTokens`。
+- **当前上下文**：取最后一条非 sidechain（`isSidechain != true`）assistant 消息的 `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`。
 
 ### 8.2 Codex
 - **数据源**：`~/.codex/sessions/**/rollout-*.jsonl`
-- **读取规则**：读取文件尾部 64KB，提取 `type == "event_msg"` 且 `payload.type == "token_count"` 的记录（忽略 `payload.info == nil`）。
-- **当前上下文**：`last_token_usage.input_tokens`；窗口大小取 `model_context_window`。模型名取最后出现的 `"model": "..."`。
+- **读取规则**：优先读取文件尾部 64KB，提取 `type == "event_msg"` 且 `payload.type == "token_count"` 的记录（忽略 `payload.info == nil`）。若文件大小与修改时间未发生变化，直接复用上次缓存结果，避免高频轮询读盘。
+- **输入 Token 统计口径**：`total_token_usage.input_tokens` 包含缓存读取 token，AgentMonitor 将 `inputTokens` 计算为 `max(0, input_tokens - cached_input_tokens)`（即净输入 token，排除缓存命中），与 Claude Code 保持一致。
+- **当前上下文**：`last_token_usage.input_tokens`；窗口大小取 `model_context_window`。
+- **模型名来源**：模型名主要出现在 `thread_settings_applied`（`payload.thread_settings.model`）或 `turn_context`（`payload.model`）等事件中。若缓存未命中且尾部 64KB 记录中未包含模型名，按 1MB 一块从文件末尾向前流式倒序扫描定位最后一个有效模型名并缓存。
 
 ### 8.3 Antigravity
 - **数据源**：`~/.gemini/antigravity/conversation_summaries.db`

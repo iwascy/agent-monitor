@@ -46,6 +46,49 @@ struct UsageTests {
         // 2000000 -> "2M", "2M"
         #expect(UsageFormatter.short(tokens: 2000000) == "2M")
         #expect(UsageFormatter.long(tokens: 2000000) == "2M")
+
+        // 999_600: short 四舍五入后满 1000k 进位为 1M，long 进位为 999.6k
+        #expect(UsageFormatter.short(tokens: 999_600) == "1M")
+        #expect(UsageFormatter.long(tokens: 999_600) == "999.6k")
+
+        // 999_400: short 为 999k
+        #expect(UsageFormatter.short(tokens: 999_400) == "999k")
+
+        // 999_960: long 四舍五入后满 1000k 进位为 1M
+        #expect(UsageFormatter.short(tokens: 999_960) == "1M")
+        #expect(UsageFormatter.long(tokens: 999_960) == "1M")
+
+        // 999_940: long 为 999.9k
+        #expect(UsageFormatter.long(tokens: 999_940) == "999.9k")
+    }
+
+    @Test("UsageFormatter: usageLevel threshold and rounding logic")
+    func testFormatterUsageLevel() {
+        let now = Date()
+
+        // 79.4% (794 / 1000) -> 79% -> normal
+        let normal = SessionUsage(contextTokens: 794, contextWindow: 1000, updatedAt: now)
+        #expect(UsageFormatter.usageLevel(usage: normal) == .normal)
+
+        // 79.6% (796 / 1000) -> 80% -> warning
+        let warning = SessionUsage(contextTokens: 796, contextWindow: 1000, updatedAt: now)
+        #expect(UsageFormatter.usageLevel(usage: warning) == .warning)
+
+        // 94.4% (944 / 1000) -> 94% -> warning
+        let warningHigh = SessionUsage(contextTokens: 944, contextWindow: 1000, updatedAt: now)
+        #expect(UsageFormatter.usageLevel(usage: warningHigh) == .warning)
+
+        // 94.6% (946 / 1000) -> 95% -> critical
+        let critical = SessionUsage(contextTokens: 946, contextWindow: 1000, updatedAt: now)
+        #expect(UsageFormatter.usageLevel(usage: critical) == .critical)
+
+        // 无 contextWindow 时按绝对数值
+        let tokenNormal = SessionUsage(contextTokens: 799_999, updatedAt: now)
+        #expect(UsageFormatter.usageLevel(usage: tokenNormal) == .normal)
+        let tokenWarning = SessionUsage(contextTokens: 800_000, updatedAt: now)
+        #expect(UsageFormatter.usageLevel(usage: tokenWarning) == .warning)
+        let tokenCritical = SessionUsage(contextTokens: 1_000_000, updatedAt: now)
+        #expect(UsageFormatter.usageLevel(usage: tokenCritical) == .critical)
     }
 
     @Test("UsageFormatter: badgeText and accessibilityLabel")
@@ -91,7 +134,7 @@ struct UsageTests {
 
     // MARK: - Claude Usage Tests
 
-    @Test("Claude: message.id deduplication, sidechain exclusion, incremental read, truncation reset")
+    @Test("Claude: message.id deduplication, sidechain inclusion in total, non-sidechain context, incremental read")
     func testClaudeUsage() throws {
         let tempDir = createTempDir()
         defer { try? FileManager.default.removeItem(at: tempDir) }
@@ -117,9 +160,9 @@ struct UsageTests {
         #expect(usage?.contextTokens == 60) // 10 + 20 + 30
         #expect(usage?.model == "claude-opus-5-5")
 
-        // 2. isSidechain == true 消息被排除：不增加累计，也不影响 contextTokens
+        // 2. isSidechain == true 消息照常计入累计与 requestCount，但上下文 contextTokens 与模型名不受 sidechain 影响 (P1-20)
         let sidechainLine = """
-        {"type":"assistant","isSidechain":true,"message":{"model":"claude-opus-5-5","id":"msg_side","usage":{"input_tokens":100,"cache_creation_input_tokens":200,"cache_read_input_tokens":300,"output_tokens":400}}}
+        {"type":"assistant","isSidechain":true,"message":{"model":"claude-haiku-side","id":"msg_side","usage":{"input_tokens":100,"cache_creation_input_tokens":200,"cache_read_input_tokens":300,"output_tokens":400}}}
         """ + "\n"
         let handle = try FileHandle(forWritingTo: transcriptURL)
         try handle.seekToEnd()
@@ -127,10 +170,13 @@ struct UsageTests {
         try handle.close()
 
         usage = tracker.claudeUsage(transcript: transcriptURL)
-        #expect(usage?.requestCount == 1)
-        #expect(usage?.inputTokens == 10)
-        #expect(usage?.outputTokens == 8)
-        #expect(usage?.contextTokens == 60)
+        #expect(usage?.requestCount == 2)
+        #expect(usage?.inputTokens == 110) // 10 + 100
+        #expect(usage?.cacheWriteTokens == 220) // 20 + 200
+        #expect(usage?.cachedInputTokens == 330) // 30 + 300
+        #expect(usage?.outputTokens == 408) // 8 + 400
+        #expect(usage?.contextTokens == 60) // 保持最后一条非 sidechain 的 60
+        #expect(usage?.model == "claude-opus-5-5") // 模型名不被 sidechain 覆盖
 
         // 3. 追加新非 sidechain 消息（增量读取）
         let block2 = """
@@ -142,11 +188,11 @@ struct UsageTests {
         try handle2.close()
 
         usage = tracker.claudeUsage(transcript: transcriptURL)
-        #expect(usage?.requestCount == 2)
-        #expect(usage?.inputTokens == 25) // 10 + 15
-        #expect(usage?.cacheWriteTokens == 20) // 20 + 0
-        #expect(usage?.cachedInputTokens == 80) // 30 + 50
-        #expect(usage?.outputTokens == 28) // 8 + 20
+        #expect(usage?.requestCount == 3)
+        #expect(usage?.inputTokens == 125) // 10 + 100 + 15
+        #expect(usage?.cacheWriteTokens == 220) // 20 + 200 + 0
+        #expect(usage?.cachedInputTokens == 380) // 30 + 300 + 50
+        #expect(usage?.outputTokens == 428) // 8 + 400 + 20
         #expect(usage?.contextTokens == 65) // 15 + 0 + 50
 
         // 4. 文件截断后重算
@@ -165,9 +211,24 @@ struct UsageTests {
         #expect(usage?.model == "claude-sonnet-4")
     }
 
+    @Test("FileUtils and UsageTracker: do not split on Unicode line separators (P2-4)")
+    func testUnicodeSeparatorHandling() throws {
+        let tempDir = createTempDir()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let testFile = tempDir.appendingPathComponent("unicode-test.jsonl")
+        // \u{2028} 是 Unicode 行分隔符，在 CharacterSet.newlines 中会被切开，但在 0x0A 字节切分下应保持在同一行
+        let lineWithUnicodeLS = "{\"type\":\"test\",\"content\":\"hello\u{2028}world\"}\n"
+        try lineWithUnicodeLS.data(using: .utf8)!.write(to: testFile)
+
+        let lines = FileUtils.readTailLines(fileURL: testFile, maxBytes: 4096)
+        #expect(lines?.first?.contains("hello\u{2028}world") == true)
+        #expect(lines?.filter { !$0.isEmpty }.count == 1)
+    }
+
     // MARK: - Codex Usage Tests
 
-    @Test("Codex: latest token_count taken, info: null ignored, model extracted")
+    @Test("Codex: latest token_count, net inputTokens calculation, and unchanged cache hit")
     func testCodexUsage() throws {
         let tempDir = createTempDir()
         defer { try? FileManager.default.removeItem(at: tempDir) }
@@ -186,17 +247,56 @@ struct UsageTests {
         let usage = tracker.codexUsage(rollout: rolloutURL)
         #expect(usage != nil)
         #expect(usage?.model == "gpt-6-astra")
-        #expect(usage?.inputTokens == 663900)
+        // P2-19: inputTokens 改为 input_tokens - cached_input_tokens = 663900 - 624500 = 39400
+        #expect(usage?.inputTokens == 39400)
         #expect(usage?.cachedInputTokens == 624500)
         #expect(usage?.outputTokens == 4600)
         #expect(usage?.reasoningTokens == 69)
         #expect(usage?.contextTokens == 98200)
         #expect(usage?.contextWindow == 258400)
+
+        // P1-21: 文件大小和 mtime 都没变时直接返回 state.lastUsage，readCount 不增加
+        let countBefore = tracker.readCount
+        let usage2 = tracker.codexUsage(rollout: rolloutURL)
+        #expect(usage2?.inputTokens == 39400)
+        #expect(tracker.readCount == countBefore)
+    }
+
+    @Test("Codex: backward stream scan finds model when beyond 64KB tail")
+    func testCodexBackwardStreamModelScan() throws {
+        let tempDir = createTempDir()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let rolloutURL = tempDir.appendingPathComponent("rollout-large.jsonl")
+        let tracker = UsageTracker()
+
+        // 头部放置模型配置
+        let headerLine = "{\"type\":\"event_msg\",\"payload\":{\"type\":\"thread_settings_applied\",\"thread_settings\":{\"model\":\"deep-reasoner-v3\"}}}\n"
+        var data = headerLine.data(using: .utf8)!
+
+        // 填充超过 70KB 的普通事件，使得头部模型被挤出尾部 64KB 窗口
+        let dummyLine = "{\"type\":\"event_msg\",\"payload\":{\"type\":\"turn_comment\",\"content\":\"filler text to expand file size beyond 64KB\"}}\n"
+        let dummyData = dummyLine.data(using: .utf8)!
+        while data.count < 75 * 1024 {
+            data.append(dummyData)
+        }
+
+        // 尾部放置 token_count（无 model）
+        let tailLine = "{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":1000,\"cached_input_tokens\":200,\"output_tokens\":50},\"last_token_usage\":{\"input_tokens\":800},\"model_context_window\":128000}}}\n"
+        data.append(tailLine.data(using: .utf8)!)
+
+        try data.write(to: rolloutURL)
+
+        // 验证反向流式扫描能够成功找到模型名 (P1-19)
+        let usage = tracker.codexUsage(rollout: rolloutURL)
+        #expect(usage != nil)
+        #expect(usage?.model == "deep-reasoner-v3")
+        #expect(usage?.inputTokens == 800) // 1000 - 200
     }
 
     // MARK: - Adapter showUsage Switch Tests
 
-    @Test("Adapter showUsage switch disables usage calculation")
+    @Test("Adapter showUsage switch disables usage calculation and transcript disk read")
     func testAdapterShowUsageSwitch() throws {
         let tempDir = createTempDir()
         defer { try? FileManager.default.removeItem(at: tempDir) }
@@ -228,23 +328,28 @@ struct UsageTests {
         """ + "\n"
         try transcriptContent.data(using: .utf8)!.write(to: transcriptURL)
 
+        let customTracker = UsageTracker()
         let adapter = ClaudeCodeAdapter(
             sessionsDirectory: sessionsDir,
             projectsDirectory: projectsDir,
             isPidAlive: { _ in true },
             maxAgeSeconds: 3600,
-            showUsage: false
+            showUsage: false,
+            usageTracker: customTracker
         )
 
+        // 1. 关闭 showUsage 时：不计算 usage，且没有磁盘读取 transcript
         var sessions = try adapter.scan()
         #expect(sessions.count == 1)
         #expect(sessions.first?.usage == nil)
+        #expect(customTracker.readCount == 0)
 
-        // 打开 showUsage
+        // 2. 打开 showUsage 时：计算 usage，并产生读取
         adapter.showUsage = true
         sessions = try adapter.scan()
         #expect(sessions.count == 1)
         #expect(sessions.first?.usage != nil)
         #expect(sessions.first?.usage?.inputTokens == 10)
+        #expect(customTracker.readCount > 0)
     }
 }

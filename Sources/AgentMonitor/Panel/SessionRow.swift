@@ -46,10 +46,19 @@ struct SessionRow: View {
                         Spacer()
                         if let usage = session.usage {
                             UsageChip(usage: usage)
+                                .accessibilityHidden(true)
                         }
                     }
 
                     accessoryView
+
+                    if let usage = session.usage,
+                       let usageLabel = UsageFormatter.accessibilityLabel(usage: usage) {
+                        Text(usageLabel)
+                            .frame(width: 0, height: 0)
+                            .clipped()
+                            .opacity(0)
+                    }
                 }
             }
             .padding(EdgeInsets(top: session.state == .running ? 7 : 8, leading: 8, bottom: session.state == .running ? 7 : 8, trailing: 8))

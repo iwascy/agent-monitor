@@ -17,8 +17,26 @@ public enum FileUtils {
             if data.isEmpty {
                 return []
             }
-            let content = String(decoding: data, as: UTF8.self)
-            var lines = content.components(separatedBy: .newlines)
+            var lines: [String] = []
+            var start = data.startIndex
+            for i in data.indices {
+                if data[i] == 0x0A {
+                    let lineData = data[start..<i]
+                    var line = String(decoding: lineData, as: UTF8.self)
+                    if line.hasSuffix("\r") {
+                        line.removeLast()
+                    }
+                    lines.append(line)
+                    start = data.index(after: i)
+                }
+            }
+            let trailingData = data[start..<data.endIndex]
+            var trailingLine = String(decoding: trailingData, as: UTF8.self)
+            if trailingLine.hasSuffix("\r") {
+                trailingLine.removeLast()
+            }
+            lines.append(trailingLine)
+
             // If we seeked into the middle of the file, the first line is likely partial.
             if offset > 0 && !lines.isEmpty {
                 lines.removeFirst()

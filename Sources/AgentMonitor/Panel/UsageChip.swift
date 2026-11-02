@@ -14,17 +14,14 @@ public struct UsageChip: View {
     }
 
     private var thresholdColor: Color {
-        if let tokens = usage.contextTokens, let window = usage.contextWindow, window > 0 {
-            let ratio = Double(tokens) / Double(window)
-            if ratio >= 0.95 { return .red }
-            if ratio >= 0.80 { return .orange }
-            return .secondary
-        } else if let tokens = usage.contextTokens {
-            if tokens >= 1_000_000 { return .red }
-            if tokens >= 800_000 { return .orange }
+        switch UsageFormatter.usageLevel(usage: usage) {
+        case .critical:
+            return .red
+        case .warning:
+            return .orange
+        case .normal:
             return .secondary
         }
-        return .secondary
     }
 
     public var body: some View {
