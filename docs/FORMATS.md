@@ -142,3 +142,50 @@
 1. **Codex 等待授权：目前无法识别**。rollout 里没有 approval/input 事件；`require_escalated` 启发式在本机数据中从未命中，仅作保留。
 2. **UTF-8 边界容错**：tail 读取文件时，必须丢弃第一个 `\n` 之前的截断片段，并使用 `String(decoding:as: UTF8.self)`，杜绝解码 nil 导致的会话抖动。
 3. **SessionStore 升级法则**：只有在观察到会话从 `running` 或 `waitingForUser` 切换到 `idle` 时才晋升为 `completed`；首次扫描一律保持 `idle`。
+
+---
+
+## 7. Claude Code Hooks 事件源规范 (v2 新增)
+
+### 7.1 事件文件存储与格式
+- **路径**：`~/Library/Application Support/AgentMonitor/events/claude.tsv`
+- **写入机制**：由 `~/Library/Application Support/AgentMonitor/hooks/cc-event.sh` 静默追加。
+- **行格式**：`<unix 秒>\t<hook 的 stdin JSON>\n`。
+- **公共字段**：`session_id`、`transcript_path`、`cwd`、`hook_event_name`。
+- **事件类型与字段**：
+  - `PermissionRequest`：`tool_name`、`tool_input`。
+  - `Notification`：`message`、`title`、`notification_type`（如 `permission_prompt`、`idle_prompt`、`elicitation_dialog` 等）。
+  - `Stop`：`last_assistant_message`。
+  - `StopFailure`：执行失败事件。
+  - `SessionStart`：`source`（startup / resume / clear / compact / fork）。
+  - `SessionEnd`：会话结束。
+- **状态覆盖映射**：
+  当 hook 事件时间晚于 `sessions/<pid>.json` 的 `statusUpdatedAt - 1s` 时生效：
+  - `PermissionRequest` -> `waitingForUser`（"等待授权"，详情展示工具命令或路径）。
+  - `Notification` + `permission_prompt` -> `waitingForUser`（"等待授权"）。
+  - `Notification` + `elicitation_dialog` -> `waitingForUser`（"在问你"）。
+  - `Stop` -> `idle`（可由 Store 晋升为 `completed`）。
+  - `StopFailure` -> `idle`（设置 `suppressCompletion = true`）。
+  - `SessionEnd` -> `idle`（设置 `suppressCompletion = true`）。
+
+---
+
+## 8. Token 用量数据源规范 (v2 新增)
+
+### 8.1 Claude Code
+- **数据源**：`~/.claude/projects/<slug>/<sessionId>.jsonl`
+- **聚合规则**：按 `message.id` 去重；排除 `isSidechain == true`；去重后的消息累计求和 `inputTokens`、`cachedInputTokens`、`cacheWriteTokens`、`outputTokens`。
+- **当前上下文**：取最后一条非 sidechain assistant 消息的 `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`。
+
+### 8.2 Codex
+- **数据源**：`~/.codex/sessions/**/rollout-*.jsonl`
+- **读取规则**：读取文件尾部 64KB，提取 `type == "event_msg"` 且 `payload.type == "token_count"` 的记录（忽略 `payload.info == nil`）。
+- **当前上下文**：`last_token_usage.input_tokens`；窗口大小取 `model_context_window`。模型名取最后出现的 `"model": "..."`。
+
+### 8.3 Antigravity
+- **数据源**：`~/.gemini/antigravity/conversation_summaries.db`
+- **读取规则**：读取 `step_count` 作为步数，不统计 token。
+
+### 8.4 DeepSeek Harness (dsh)
+- **数据源**：`session.v4.jsonl.zstd` 本地不含 token 字段，不显示用量。
+

@@ -388,3 +388,79 @@ Initial transitions generated: 3 (suppressed from notifications)
   - 两个开关都找不到时直接退出，不做任何修改；
   - 恢复后的值和原值不一致时，以非 0 状态码退出。
   - 这个脚本会修改系统辅助功能设置，所以本轮只做了类型检查，**没有实际运行**。`docs/screenshots/a11y/` 里仍是上一轮的截图。
+
+---
+
+## 8. v2 功能落地与实测验证 (v2 Features)
+
+在 v2 版本中，我们全面落地了 SPEC 中规定的全部 6 项核心特性（F1 - F6）以及对应的设置窗口与快捷键体系：
+
+### 8.1 F1 精确跳转与右键菜单
+1. **进程与 TTY 解析 (`HostResolver`)**：
+   - 基于 Darwin `sysctl([CTL_KERN, KERN_PROC, KERN_PROC_PID, pid])` 提取 `kinfo_proc`。
+   - 解析首层进程的 `kp_eproc.e_tdev` 并通过 `devname` 获取 tty（如 `/dev/ttys012`）。
+   - 沿 `e_ppid` 递归上溯查找前台宿主应用 `NSRunningApplication`（支持 Warp、Ghostty、kitty、iTerm2、Terminal、VS Code、Cursor、Windsurf、Zed 等）。
+2. **多级聚焦策略 (`FocusStrategies`)**：
+   - 第一级：针对 iTerm2 与 Terminal，通过后台 `NSAppleScript`（2秒超时）精准选中匹配 tty 的标签页并置顶。
+   - 第二级：针对其他终端，利用 macOS Accessibility (AX) 树匹配窗口标题（支持标题清理、emoji 剥离、空格压缩、大小写归一化）。
+   - 第三级：回退激活应用进程。
+3. **右键原生菜单 (`contextMenu`)**：
+   - 包含「跳转到会话」（副标题显示解析的目标应用/窗口）、已完成会话「标为已读」、「在访达中显示目录」、「拷贝目录路径」、「拷贝会话 ID」、「静音此项目」（子菜单：所有通知 / 仅「已完成」通知）及「在面板中隐藏此项目」。
+
+### 8.2 F2 超时再次提醒与视觉增强
+1. **提醒调度器 (`ReminderScheduler`)**：
+   - 纯函数式阈值评价：依据 `remindAfterMinutes` 和 `remindMaxCount`，线性计算当前应达提醒轮次 $k = \min(\text{maxCount}, \lfloor\text{elapsed} / \text{interval}\rfloor)$。
+   - 状态重入重置：离开 `waitingForUser` 时重置计数。
+2. **菜单栏与面板超时表现**：
+   - 超时后菜单栏角标底色变为 `#D70015`（`isOverdue == true`），渲染尺寸严格保持 16x16 / 22x22 像素完全不变。
+   - 分组标题追加「· N 个已超时」红色计数；会话行时间高亮为闹钟图标 + 红色粗体。
+
+### 8.3 F3 设置窗口与静音体系
+1. **设置窗口管理器 (`SettingsWindowManager`)**：
+   - 统一单实例管理，支持 6 个 Tab（通用、通知、Agent、静音、集成、快捷键）。
+   - 所有配置均统一通过 `AppSettings.shared` 持久化，Mock 环境自动隔离配置 suite。
+2. **静音规则 (`MuteRule`)**：
+   - 规则按路径最长前缀精准匹配。
+   - `.all` 范围：不发任何通知、不计入菜单栏等待数量与超时判断。
+   - `hideInPanel` 规则：会话自动从 `MonitorViewModel.sessions` 排除，界面实时联动隐藏。
+   - 静音设置页：支持原生表格展现、范围 Picker、隐藏复选框以及 `NSOpenPanel` 目录选取与删除。
+
+### 8.4 F4 全局快捷键与面板键盘导航
+1. **Carbon 热键监听 (`HotkeyCenter`)**：
+   - 基于 `RegisterEventHotKey` + `InstallEventHandler`，无需辅助功能权限。
+   - 注册 `togglePanel`（默认 ⌃⌥A）和 `jumpWaiting`（跳转等待最久会话）。
+   - 具备热键冲突检测与错误捕获。
+2. **录制控件 (`KeyRecorderView`)**：
+   - 基于 `NSViewRepresentable` 实现第一响应者，支持修饰键解析、清除及冲突提示。
+3. **面板内键盘操作 (`MenuView`)**：
+   - 支持 `↓ / ↑` 导航、`↩` 跳转、`⌫` 标为已读、`⌘⌫` 全部标为已读、`1–4` 筛选、`esc` 取消筛选或关闭、`⌘,` 打开设置。
+   - 选中行赋予 `.fill.quaternary` 底色与 1.5pt accentColor 70% 描边，AX value 输出「已选中」。
+   - 键盘模式下底部平滑淡入快捷键提示条。
+
+### 8.5 F5 Claude Code Hooks 事件源
+1. **Hook 脚本与事件解析**：
+   - 安装 `cc-event.sh` 到 Application Support 目录，静默写入 `claude.tsv`。
+   - `ClaudeHookEventReader` 增量读取文件更新，半行保留，截断从头重读，超过 5MB 自动轮转为 `.1`。
+2. **配置安全合并 (`ClaudeHookInstaller`)**：
+   - 对 `~/.claude/settings.json` 进行纯 JSON 结构修改，支持 7 个目标事件追加。
+   - 写入前自动生成 `.agentmonitor-backup` 备份文件，采用同目录临时文件原子重命名替换。
+   - 支持精准卸载并清理空结构。
+3. **集成设置页 (`IntegrationSettingsView`)**：
+   - 实时检测「已安装」、「未安装」与「需要修复」状态。
+   - 弹出确认 Sheet，展示动态生成的将要合并的 JSON 片段。
+   - 提供辅助功能与自动化权限状态检测与一键跳转。
+
+### 8.6 F6 Token 用量追踪
+1. **增量去重统计 (`UsageTracker`)**：
+   - Claude Code：按 `message.id` 严格去重，排除 sidechain，1MB 流式分块与偏移量增量缓存。
+   - Codex：读取 rollout `.jsonl` 尾部 64KB，提取 `token_count`、`model_context_window` 与模型名。
+   - Antigravity：读取 SQLite 中的 `step_count` 作为步数。
+2. **格式化与视觉标签 (`UsageFormatter` & `UsageChip`)**：
+   - 严格实现 short / long 数值缩写与百分比计算。
+   - 会话行第二行右侧展示小标签，根据使用比例与数值动态变色（orange / red）。
+   - 悬停 0.4 秒自动弹出 Popover，展示上下文窗口进度条、输入、输出、缓存与更新时间。
+
+### 8.7 验证与测试指标
+- **单元测试覆盖**：项目内共 63 项测试（`UsageTests`、`HotkeyTests`、`ClaudeHookTests`、`JumpTests`、`ReminderTests`、`MonitorViewModelTests`、`AgentMonitorCoreTests` 等），全部一次性 PASS（0 报错、0 失败）。
+- **打包验证**：通过 `./scripts/build-app.sh` 顺利完成 release 模式编译、AppIcon 组装、代码签名与 LaunchServices 注册。
+
