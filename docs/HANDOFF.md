@@ -460,7 +460,18 @@ Initial transitions generated: 3 (suppressed from notifications)
    - 会话行第二行右侧展示小标签，根据使用比例与数值动态变色（orange / red）。
    - 悬停 0.4 秒自动弹出 Popover，展示上下文窗口进度条、输入、输出、缓存与更新时间。
 
-### 8.7 验证与测试指标
-- **单元测试覆盖**：项目内共 63 项测试（`UsageTests`、`HotkeyTests`、`ClaudeHookTests`、`JumpTests`、`ReminderTests`、`MonitorViewModelTests`、`AgentMonitorCoreTests` 等），全部一次性 PASS（0 报错、0 失败）。
-- **打包验证**：通过 `./scripts/build-app.sh` 顺利完成 release 模式编译、AppIcon 组装、代码签名与 LaunchServices 注册。
+### 8.7 实测结论与验证指标
+
+1. **`MenuBarExtraToggler` 实测结果 (P2 实测)**：
+   - 通过沿 `NSStatusBarWindow` 检索其 `NSStatusBarButton` 并模拟触发 `performClick`，在 macOS 14+（当前 macOS 26）环境下，全局热键（默认 `⌃⌥A`）能够稳定呼出 SwiftUI `MenuBarExtra` 弹窗；再次按下该热键时，系统状态栏按钮接收到点击事件后平滑收起面板，完整实现了全局开/关双向 Toggle 交互。
+2. **`esc` 键关闭面板实现 (P2 实测)**：
+   - 在 `MonitorViewModel.handleKeyEvent` 中，当收到 `Escape` 键时按两级处理：若当前存在筛选条件（`filterState != nil`），优先清空筛选状态并重置键盘高亮项；若当前未开启任何筛选，直接调用 `MenuBarExtraToggler.toggle()` 收起面板窗口。
+3. **设置窗口打开与页面直达 (P0-3 实测)**：
+   - 彻底废弃在 macOS 14 上被静默忽略的私有 selector `showSettingsWindow:`。
+   - 齿轮菜单首项采用 SwiftUI 原生 `SettingsLink` 打开设置窗口；面板快捷键 `⌘,` 与通知唤醒场景下，通过从根视图层注入的 `@Environment(\.openSettings)` 闭包由 `SettingsWindowManager` 单例触发，并结合 `SettingsTab` 枚举绑定，实现通知中心点击权限告警时一键直达「集成」设置页。
+4. **提示音配置与分发结论 (P2-11 实测)**：
+   - 实测证实：macOS 的 `UNUserNotificationCenter` 守护进程要求音频资源必须驻留在当前 App Bundle 的 `Resources` 或用户的 `~/Library/Sounds` 目录下，直接通过 `UNNotificationSound(named:)` 引用系统目录 `/System/Library/Sounds/<name>.aiff` 会因权限与沙盒边界被系统忽略。因此应用内部试听使用 `NSSound(named: name)` 原生发声（试听「默认」与「无」时不播放 Ping），而在派发系统通知时安全使用 `UNNotificationSound.default` 作为可靠回退。
+5. **单元测试与打包验证指标**：
+   - **单元测试覆盖**：项目内共计 78 项测试用例（覆盖 P0-4 安全安装与符号链接、P0-2 提醒抑制状态推进、P1-2 异步 AppleScript 竞速、P1-19 逆向流式扫描、P1-20 累计统计、P2-2 根路径匹配等全部新增/修改逻辑），全部通过（0 报错、0 失败）。
+   - **打包与签名验证**：通过 `./scripts/build-app.sh` 顺利完成 release 模式编译、AppIcon 组装、代码签名与 LaunchServices 注册（产物位于 `build/AgentMonitor.app`）。通过 `swift run probe` 成功完成本机 14 个真实会话（涵盖 Claude Code、Codex、Antigravity）的数据扫描与用量提取。
 

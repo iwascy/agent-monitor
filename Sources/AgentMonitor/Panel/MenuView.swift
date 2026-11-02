@@ -66,6 +66,11 @@ public struct MenuView: View {
                     return event
                 }
             }
+            if ProcessInfo.processInfo.environment["AGENT_MONITOR_OPEN_SETTINGS"] == "1" {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    SettingsWindowManager.shared.openSettings()
+                }
+            }
         }
         .onDisappear {
             viewModel.onPanelDisappear()

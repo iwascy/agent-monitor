@@ -17,7 +17,19 @@ public final class SettingsWindowManager: ObservableObject {
     @Published public var selectedTab: SettingsTab = .general
     public var openSettingsAction: (() -> Void)?
 
-    private init() {}
+    private init() {
+        if let tabEnv = ProcessInfo.processInfo.environment["AGENT_MONITOR_SETTINGS_TAB"]?.lowercased() {
+            switch tabEnv {
+            case "general": selectedTab = .general
+            case "notification": selectedTab = .notification
+            case "agents": selectedTab = .agents
+            case "mute": selectedTab = .mute
+            case "integration": selectedTab = .integration
+            case "hotkey": selectedTab = .hotkey
+            default: break
+            }
+        }
+    }
 
     public func openSettings(tab: SettingsTab? = nil) {
         if let tab = tab {

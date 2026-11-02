@@ -1,0 +1,664 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Agent Monitor v2 设计稿</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  Agent Monitor v2 设计稿（配合 SPEC.md 阅读）。
+  1 CSS px = 1 pt。面板部分的尺寸、颜色与 website/assets/panel.css（现有面板的 1:1 复刻）一致，
+  新增元素全部用 NEW 标出，实现时以本文件的数值为准。
+-->
+<style>
+:root {
+  --page-bg: #e9ebef;
+  --ink: #1d1d1f;
+  --muted: #6e6e73;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--page-bg);
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.page { max-width: 1280px; margin: 0 auto; padding: 32px 32px 96px; }
+h1 { font-size: 26px; margin: 0 0 6px; }
+h2 { font-size: 19px; margin: 56px 0 6px; padding-top: 16px; border-top: 1px solid rgba(0,0,0,.1); }
+h3 { font-size: 14px; margin: 24px 0 8px; color: var(--muted); font-weight: 600; }
+p.note { margin: 4px 0 16px; color: var(--muted); font-size: 13px; line-height: 1.6; max-width: 860px; }
+.toc { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0 0; }
+.toc a { font-size: 12px; padding: 5px 10px; border-radius: 999px; background: #fff; color: var(--ink); text-decoration: none; box-shadow: 0 0 0 .5px rgba(0,0,0,.12); }
+.row { display: flex; gap: 32px; flex-wrap: wrap; align-items: flex-start; }
+.stage { padding: 28px; border-radius: 16px; background: linear-gradient(135deg, #c9d6ea, #e8d9e6 55%, #f2e6d6); }
+.stage.dark { background: linear-gradient(135deg, #1d2333, #2b2236 55%, #33291f); }
+.cap { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
+.new { display: inline-block; font-size: 9px; font-weight: 700; letter-spacing: .3px; color: #fff; background: #af52de; border-radius: 4px; padding: 1px 4px; vertical-align: 1px; margin-left: 4px; }
+.callout { position: relative; }
+.pin { position: absolute; width: 18px; height: 18px; border-radius: 50%; background: #af52de; color: #fff; font: 700 10px/18px -apple-system, sans-serif; text-align: center; box-shadow: 0 0 0 2px #fff; z-index: 5; }
+table.spec { border-collapse: collapse; font-size: 12px; background: #fff; border-radius: 10px; overflow: hidden; box-shadow: 0 0 0 .5px rgba(0,0,0,.1); }
+table.spec th, table.spec td { padding: 7px 10px; text-align: left; border-bottom: 1px solid rgba(0,0,0,.06); vertical-align: top; }
+table.spec th { background: #f5f5f7; font-weight: 600; }
+code, kbd { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11.5px; }
+kbd { padding: 1px 5px; border-radius: 4px; background: #fff; box-shadow: 0 0 0 .5px rgba(0,0,0,.2), 0 1px 0 rgba(0,0,0,.15); }
+
+/* ================= panel tokens (copied from website/assets/panel.css) ================= */
+.am {
+  --am-orange: #ff8d28; --am-green: #34c759; --am-blue: #0088ff; --am-gray: #8e8e93;
+  --am-red: #ff383c;             /* NEW systemRed (macOS 26 light) */
+  --am-accent: #0088ff;          /* NEW controlAccentColor, keyboard selection ring */
+  --am-label: rgba(0,0,0,.85); --am-secondary: rgba(0,0,0,.5); --am-tertiary: rgba(0,0,0,.26);
+  --am-fill-q: rgba(0,0,0,.05); --am-fill-t: rgba(0,0,0,.08);
+  --am-window-bg: rgba(250,251,253,.84); --am-window-border: rgba(0,0,0,.13); --am-window-hi: rgba(255,255,255,.85);
+  --am-glass-bg: linear-gradient(180deg, rgba(255,255,255,.92), rgba(250,251,253,.78));
+  --am-glass-border: rgba(0,0,0,.09); --am-glass-shadow: 0 1px 2px rgba(0,0,0,.06), 0 2px 8px rgba(0,0,0,.05); --am-glass-hi: rgba(255,255,255,.95);
+  --am-menu-bg: rgba(246,246,248,.9);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+  color: var(--am-label); line-height: 1.2; text-align: left; user-select: none;
+}
+.am.dark {
+  --am-orange: #ffb44f; --am-green: #56e483; --am-blue: #36bdff; --am-gray: #98989d;
+  --am-red: #ff6165; --am-accent: #36bdff;
+  --am-label: rgba(255,255,255,.92); --am-secondary: rgba(255,255,255,.55); --am-tertiary: rgba(255,255,255,.25);
+  --am-fill-q: rgba(255,255,255,.075); --am-fill-t: rgba(255,255,255,.11);
+  --am-window-bg: rgba(52,52,54,.86); --am-window-border: rgba(0,0,0,.6); --am-window-hi: rgba(255,255,255,.2);
+  --am-glass-bg: linear-gradient(180deg, rgba(255,255,255,.16), rgba(255,255,255,.1));
+  --am-glass-border: rgba(255,255,255,.12); --am-glass-shadow: 0 1px 2px rgba(0,0,0,.25), 0 2px 8px rgba(0,0,0,.2); --am-glass-hi: rgba(255,255,255,.18);
+  --am-menu-bg: rgba(40,40,42,.9);
+}
+.am-mid { margin: 0 1.5px; }
+.am-window { position: relative; width: 384px; border-radius: 18px; background: var(--am-window-bg);
+  backdrop-filter: blur(36px) saturate(1.8); -webkit-backdrop-filter: blur(36px) saturate(1.8);
+  box-shadow: 0 0 0 .5px var(--am-window-border), inset 0 0 0 .5px var(--am-window-hi), 0 10px 30px rgba(0,0,0,.18), 0 2px 8px rgba(0,0,0,.08); }
+.am-inner { display: flex; flex-direction: column; gap: 6px; padding: 10px; }
+.am-glass { position: relative; background: var(--am-glass-bg); box-shadow: 0 0 0 .5px var(--am-glass-border), inset 0 .5px 0 var(--am-glass-hi), var(--am-glass-shadow); }
+.am-header { display: flex; align-items: center; padding: 4px 6px 2px; }
+.am-header-text { display: flex; flex-direction: column; gap: 2px; flex: 1; }
+.am-title { font-size: 13px; font-weight: 700; line-height: 16px; }
+.am-subtitle { font-size: 10px; line-height: 13px; color: var(--am-secondary); }
+.am-header-buttons { display: flex; gap: 8px; }
+.am-circle { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; color: var(--am-label); }
+.am-circle svg { width: 15px; height: 15px; }
+.am-filters { display: flex; gap: 6px; padding: 0 2px 2px; }
+.am-cap { flex: 1 1 0; display: flex; align-items: center; justify-content: center; gap: 4px; padding: 7px 4px; border-radius: 999px; color: var(--am-secondary); --tint: var(--am-gray); }
+.am-cap .am-dot { background: var(--tint); }
+.am-cap-count { font-size: 12px; line-height: 15px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--tint); }
+.am-cap-title { font-size: 10px; line-height: 13px; }
+.t-waiting { --tint: var(--am-orange); } .t-completed { --tint: var(--am-green); } .t-running { --tint: var(--am-blue); } .t-idle { --tint: var(--am-gray); }
+.am-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--tint); }
+.am-list { display: flex; flex-direction: column; gap: 6px; padding: 0 1px; }
+.am-section { display: flex; align-items: center; gap: 6px; padding: 6px 8px 0; font-size: 10px; line-height: 13px; font-weight: 600; color: var(--am-secondary); }
+.am-section .overdue { color: var(--am-red); }
+.am-row { position: relative; display: flex; align-items: flex-start; gap: 10px; padding: 8px; border-radius: 12px; }
+.am-row.s-running { align-items: center; padding: 7px 8px; }
+.am-row.is-hover { background: var(--am-fill-q); }
+/* NEW keyboard selection: hover fill + 1.5pt inset accent ring */
+.am-row.is-selected { background: var(--am-fill-q); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--am-accent) 70%, transparent); }
+.am-icon { width: 30px; height: 30px; flex: none; position: relative; }
+.am-icon img { position: absolute; inset: -2px; width: 34px; height: 34px; }
+.am-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.am-line1, .am-line2 { display: flex; align-items: baseline; gap: 8px; }
+.am-row-title { flex: 1; min-width: 0; font-size: 13px; line-height: 16px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.s-idle .am-row-title { color: var(--am-secondary); }
+.am-time { flex: none; font-size: 11px; line-height: 13px; font-variant-numeric: tabular-nums; color: var(--am-secondary); display: inline-flex; align-items: center; gap: 3px; }
+.s-waiting .am-time { color: var(--am-orange); font-weight: 500; }
+.s-running .am-time { color: var(--am-blue); }
+/* NEW overdue waiting */
+.am-row.is-overdue .am-time { color: var(--am-red); font-weight: 600; }
+.am-time svg { width: 11px; height: 11px; }
+.am-sub { flex: 1; min-width: 0; font-size: 11px; line-height: 14px; color: var(--am-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* NEW usage chip (line 2, trailing) */
+.am-usage { flex: none; display: inline-flex; align-items: center; gap: 3px; font-size: 10.5px; line-height: 14px; font-variant-numeric: tabular-nums; color: var(--am-secondary); padding: 0 5px; border-radius: 5px; }
+.am-usage.is-hover { background: var(--am-fill-t); color: var(--am-label); }
+.am-usage.warn { color: var(--am-orange); } .am-usage.crit { color: var(--am-red); }
+.am-usage svg { width: 10px; height: 10px; }
+.am-ask { align-self: flex-start; max-width: 100%; display: flex; align-items: center; gap: 7px; margin-top: 4px; padding: 5px 8px; border-radius: 8px; background: var(--am-fill-q); }
+.am-ask-label { flex: none; font-size: 11.5px; line-height: 15px; font-weight: 600; color: var(--am-orange); }
+.am-ask-detail { min-width: 0; font-size: 11.5px; line-height: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.am-ask-detail.is-cmd { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; }
+.am-done, .am-run { display: flex; align-items: center; gap: 6px; margin-top: 2px; min-width: 0; }
+.am-done svg { width: 12px; height: 12px; color: var(--am-green); flex: none; }
+.am-done span, .am-run span:last-child { font-size: 11.5px; line-height: 14px; color: var(--am-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.am-run span:last-child { font-size: 11px; }
+.am-pulse { position: relative; width: 6px; height: 6px; flex: none; }
+.am-pulse::after { content: ""; position: absolute; inset: 0; border-radius: 50%; background: var(--am-blue); }
+.am-pulse::before { content: ""; position: absolute; inset: 0; border-radius: 50%; box-shadow: 0 0 0 1.5px var(--am-blue); animation: am-pulse 1.8s ease-out infinite alternate; }
+@keyframes am-pulse { from { transform: scale(1); opacity: .6; } to { transform: scale(2.6); opacity: 0; } }
+.am-idle-head { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 12px; font-size: 10px; line-height: 13px; font-weight: 600; color: var(--am-secondary); }
+.am-idle-head .am-dot { background: var(--am-gray); }
+.am-idle-head span:not(.am-dot) { flex: 1; }
+.am-idle-head svg { width: 10px; height: 10px; }
+.am-bottom { display: flex; justify-content: center; margin-top: -6px; padding: 4px 0 2px; }
+.am-big { display: flex; align-items: center; gap: 7px; height: 28px; padding: 0 16px; border-radius: 999px; font-size: 13px; }
+.am-big svg { width: 13px; height: 13px; }
+/* NEW keyboard hint bar: only while keyboard selection is active */
+.am-hints { display: flex; justify-content: center; gap: 10px; padding: 2px 0 0; font-size: 10px; line-height: 13px; color: var(--am-tertiary); }
+.am-hints b { font-weight: 600; color: var(--am-secondary); font-family: -apple-system, sans-serif; }
+
+/* ================= macOS menu (context menu / gear menu) ================= */
+.mac-menu { width: 272px; padding: 5px; border-radius: 10px; background: var(--am-menu-bg); backdrop-filter: blur(30px); -webkit-backdrop-filter: blur(30px);
+  box-shadow: 0 0 0 .5px var(--am-window-border), inset 0 0 0 .5px var(--am-window-hi), 0 10px 30px rgba(0,0,0,.22); font-size: 13px; }
+.mm-item { display: flex; align-items: center; gap: 8px; height: 24px; padding: 0 9px; border-radius: 5px; color: var(--am-label); white-space: nowrap; }
+.mm-item .ico { width: 15px; height: 15px; color: var(--am-label); flex: none; }
+.mm-item .kbd { margin-left: auto; color: var(--am-secondary); font-size: 12px; }
+.mm-item.is-hover { background: var(--am-accent); color: #fff; } .mm-item.is-hover .kbd, .mm-item.is-hover .ico { color: rgba(255,255,255,.85); }
+.mm-item.is-disabled { color: var(--am-tertiary); } .mm-item.is-disabled .ico { color: var(--am-tertiary); }
+.mm-item .chev { margin-left: auto; width: 9px; height: 9px; color: var(--am-secondary); }
+.mm-sub { font-size: 11px; color: var(--am-secondary); padding: 0 9px 3px 32px; margin-top: -3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mm-sep { height: 1px; margin: 5px 9px; background: var(--am-fill-t); }
+.mm-check { width: 15px; text-align: center; flex: none; }
+
+/* ================= popover ================= */
+.popover { width: 236px; padding: 12px; border-radius: 12px; background: var(--am-menu-bg); backdrop-filter: blur(30px);
+  box-shadow: 0 0 0 .5px var(--am-window-border), inset 0 0 0 .5px var(--am-window-hi), 0 10px 30px rgba(0,0,0,.22); font-size: 12px; position: relative; }
+.popover::before { content: ""; position: absolute; top: -6px; left: 40px; width: 12px; height: 12px; background: inherit; transform: rotate(45deg); box-shadow: -.5px -.5px 0 var(--am-window-border); }
+.pv-title { display: flex; align-items: baseline; justify-content: space-between; font-weight: 600; font-size: 12px; margin-bottom: 8px; }
+.pv-title span { font-weight: 400; color: var(--am-secondary); font-size: 11px; font-family: ui-monospace, Menlo, monospace; }
+.pv-gauge { height: 5px; border-radius: 3px; background: var(--am-fill-t); overflow: hidden; margin: 2px 0 4px; }
+.pv-gauge i { display: block; height: 100%; background: var(--am-blue); border-radius: 3px; }
+.pv-row { display: flex; justify-content: space-between; line-height: 19px; }
+.pv-row span:first-child { color: var(--am-secondary); }
+.pv-row span:last-child { font-variant-numeric: tabular-nums; }
+.pv-sep { height: 1px; background: var(--am-fill-t); margin: 6px 0; }
+.pv-foot { font-size: 10px; color: var(--am-tertiary); margin-top: 6px; line-height: 1.4; }
+
+/* ================= notification ================= */
+.nt { width: 344px; display: flex; align-items: center; gap: 10px; padding: 11px 12px; border-radius: 22px; background: rgba(250,251,253,.78); backdrop-filter: blur(30px);
+  box-shadow: 0 0 0 .5px rgba(0,0,0,.12), inset 0 .5px 0 .5px rgba(255,255,255,.8), 0 8px 24px rgba(0,0,0,.14); font-size: 13px; line-height: 16px; color: rgba(0,0,0,.85); }
+.nt img.app { width: 38px; height: 38px; flex: none; }
+.nt img.att { width: 32px; height: 32px; flex: none; border-radius: 7px; }
+.nt .tx { flex: 1; min-width: 0; } .nt .tx b, .nt .tx div { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nt .cmd { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+
+/* ================= menu bar ================= */
+.mb { zoom: 1.6; display: inline-flex; align-items: center; gap: 14px; height: 24px; padding: 0 12px; border-radius: 6px; background: rgba(255,255,255,.55); font-size: 13px; }
+.mb.dark { background: rgba(30,30,32,.7); color: #fff; }
+
+/* ================= settings window ================= */
+.sw { --s-bg: #f2f2f4; --s-card: #fff; --s-line: rgba(0,0,0,.08); --s-label: rgba(0,0,0,.85); --s-sec: rgba(0,0,0,.5); --s-acc: #0088ff;
+  width: 600px; border-radius: 16px; background: var(--s-bg); overflow: hidden; color: var(--s-label); font-size: 13px;
+  box-shadow: 0 0 0 .5px rgba(0,0,0,.2), 0 18px 50px rgba(0,0,0,.25); }
+.sw.dark { --s-bg: #1e1e20; --s-card: #2c2c2e; --s-line: rgba(255,255,255,.08); --s-label: rgba(255,255,255,.92); --s-sec: rgba(255,255,255,.55); --s-acc: #36bdff; }
+.sw-bar { position: relative; height: 82px; padding-top: 10px; background: var(--s-bg); border-bottom: .5px solid var(--s-line); }
+.sw-lights { position: absolute; left: 14px; top: 14px; display: flex; gap: 8px; }
+.sw-lights i { width: 12px; height: 12px; border-radius: 50%; background: #ff5f57; } .sw-lights i:nth-child(2) { background: #febc2e; } .sw-lights i:nth-child(3) { background: #28c840; }
+.sw-name { text-align: center; font-weight: 600; font-size: 13px; line-height: 16px; }
+.sw-tabs { display: flex; justify-content: center; gap: 2px; margin-top: 6px; }
+.sw-tab { width: 70px; height: 46px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; border-radius: 8px; font-size: 11px; color: var(--s-sec); }
+.sw-tab svg { width: 20px; height: 20px; }
+.sw-tab.on { background: rgba(0,0,0,.07); color: var(--s-acc); }
+.sw.dark .sw-tab.on { background: rgba(255,255,255,.1); }
+.sw-body { padding: 18px 22px 22px; display: flex; flex-direction: column; gap: 16px; }
+.grp-h { font-size: 11px; font-weight: 600; color: var(--s-sec); margin: 0 0 6px 10px; }
+.grp { background: var(--s-card); border-radius: 10px; box-shadow: 0 0 0 .5px var(--s-line); }
+.it { display: flex; align-items: center; gap: 10px; min-height: 38px; padding: 7px 12px; border-top: .5px solid var(--s-line); }
+.it:first-child { border-top: 0; }
+.it .lbl { flex: 1; min-width: 0; } .it .lbl small { display: block; font-size: 11px; color: var(--s-sec); margin-top: 2px; line-height: 1.35; }
+.grp-f { font-size: 11px; color: var(--s-sec); margin: 6px 10px 0; line-height: 1.45; }
+.tg { width: 32px; height: 19px; border-radius: 10px; background: rgba(0,0,0,.12); position: relative; flex: none; }
+.sw.dark .tg { background: rgba(255,255,255,.18); }
+.tg::after { content: ""; position: absolute; top: 2px; left: 2px; width: 15px; height: 15px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.25); }
+.tg.on { background: #34c759; } .tg.on::after { left: 15px; }
+.pop { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 6px 0 9px; border-radius: 6px; background: var(--s-card); box-shadow: 0 0 0 .5px rgba(0,0,0,.18), 0 1px 1px rgba(0,0,0,.06); font-size: 12px; flex: none; }
+.sw.dark .pop { background: #3a3a3c; box-shadow: 0 0 0 .5px rgba(255,255,255,.12); }
+.pop::after { content: "⌃"; transform: rotate(180deg); font-size: 9px; color: var(--s-sec); display: inline-block; }
+.btn { display: inline-flex; align-items: center; height: 22px; padding: 0 11px; border-radius: 6px; background: var(--s-card); box-shadow: 0 0 0 .5px rgba(0,0,0,.18), 0 1px 1px rgba(0,0,0,.06); font-size: 12px; flex: none; }
+.sw.dark .btn { background: #3a3a3c; }
+.btn.pri { background: var(--s-acc); color: #fff; box-shadow: none; }
+.btn.danger { color: #ff383c; }
+.pill { display: inline-flex; align-items: center; gap: 5px; height: 18px; padding: 0 7px; border-radius: 9px; font-size: 11px; font-weight: 600; }
+.pill.ok { background: rgba(52,199,89,.15); color: #248a3d; } .pill.off { background: rgba(0,0,0,.06); color: var(--s-sec); } .pill.warn { background: rgba(255,141,40,.16); color: #c45c00; }
+.sw.dark .pill.ok { color: #56e483; } .sw.dark .pill.off { background: rgba(255,255,255,.08); }
+.agent-ico { width: 26px; height: 26px; flex: none; }
+.path { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; }
+.rec { display: inline-flex; align-items: center; gap: 4px; min-width: 110px; height: 24px; padding: 0 8px; border-radius: 6px; background: var(--s-bg); box-shadow: inset 0 0 0 .5px rgba(0,0,0,.15); font-size: 13px; justify-content: space-between; flex: none; }
+.rec.recording { box-shadow: inset 0 0 0 2px var(--s-acc); color: var(--s-sec); font-size: 12px; }
+.rec .x { width: 14px; height: 14px; border-radius: 50%; background: rgba(0,0,0,.25); color: #fff; font-size: 9px; display: grid; place-items: center; }
+.tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+.tbl th { text-align: left; font-weight: 500; color: var(--s-sec); padding: 6px 12px; border-bottom: .5px solid var(--s-line); font-size: 11px; }
+.tbl td { padding: 6px 12px; border-top: .5px solid var(--s-line); }
+.tbl tr.sel td { background: var(--s-acc); color: #fff; } .tbl tr.sel .pop { color: var(--s-label); }
+.pm { display: flex; border-top: .5px solid var(--s-line); }
+.pm span { width: 26px; height: 22px; display: grid; place-items: center; font-size: 15px; color: var(--s-sec); border-right: .5px solid var(--s-line); }
+.chk { width: 14px; height: 14px; border-radius: 4px; background: var(--s-acc); color: #fff; display: inline-grid; place-items: center; font-size: 10px; flex: none; }
+.chk.off { background: var(--s-card); box-shadow: inset 0 0 0 .5px rgba(0,0,0,.3); color: transparent; }
+.kmap { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; padding: 10px 12px; font-size: 12px; align-items: center; }
+.kmap kbd { justify-self: start; }
+pre.diff { margin: 0; padding: 10px 12px; font-size: 11px; line-height: 1.5; background: var(--s-bg); border-radius: 8px; overflow: auto; max-height: 260px; box-shadow: inset 0 0 0 .5px var(--s-line); }
+pre.diff .a { color: #248a3d; background: rgba(52,199,89,.1); display: block; }
+.sheet { width: 680px; padding: 20px; border-radius: 14px; background: var(--s-bg); box-shadow: 0 0 0 .5px rgba(0,0,0,.2), 0 18px 50px rgba(0,0,0,.3); display: flex; flex-direction: column; gap: 12px; }
+.sheet h4 { margin: 0; font-size: 14px; }
+.sheet p { margin: 0; font-size: 12px; color: var(--s-sec); line-height: 1.5; }
+.sheet .acts { display: flex; justify-content: flex-end; gap: 8px; align-items: center; }
+.sheet .acts .lft { margin-right: auto; display: flex; gap: 6px; align-items: center; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="page">
+
+<h1>Agent Monitor v2 设计稿</h1>
+<p class="note">
+  覆盖六项功能：<b>F1 精确跳转</b>、<b>F2 超时再次提醒</b>、<b>F3 设置窗口</b>、<b>F4 全局快捷键与面板键盘操作</b>、<b>F5 Claude Code Hooks 事件源</b>、<b>F6 Token 用量</b>。
+  行为、数据来源、实现文件和验收标准见同目录的 <code>SPEC.md</code>。本文件只管长什么样；凡是带 <span class="new">NEW</span> 的元素都是新增的，其余元素与现有面板（<code>website/assets/panel.css</code>）保持一致，不要改动。
+  1 CSS px = 1 pt，颜色是 macOS 26 系统色，实现时用对应的 SwiftUI 语义色（见 SPEC.md「视觉规格」）。
+</p>
+<div class="toc">
+  <a href="#panel">1. 面板（深浅色）</a><a href="#states">2. 新增行状态细节</a><a href="#menus">3. 右键菜单 / 齿轮菜单</a>
+  <a href="#popover">4. Token 用量浮层</a><a href="#notify">5. 通知与菜单栏</a><a href="#settings">6. 设置窗口（6 页）</a><a href="#sheet">7. Hooks 安装确认</a><a href="#keys">8. 键盘映射</a>
+</div>
+
+<!-- ======================================================================= -->
+<h2 id="panel">1. 面板总览</h2>
+<p class="note">
+  演示状态：用户按了 <kbd>⌃⌥A</kbd> 打开面板，又按 <kbd>↓</kbd> 选中了第一行（键盘选中态 = 悬停底色 + 1.5pt 强调色内描边），因此底部出现快捷键提示条。
+  第一行等待已超过「再次提醒」阈值（默认 5 分钟），进入超时态：时间变红并带闹钟图标，分组标题追加「· 1 个已超时」。每行第二行末尾是 Token 用量标签。
+</p>
+
+<div class="row">
+<div>
+<div class="stage">
+<div class="am light"><div class="am-window"><div class="am-inner">
+  <div class="am-header">
+    <div class="am-header-text"><div class="am-title">Agent 会话</div><div class="am-subtitle">5 个活跃<span class="am-mid">·</span>4 个 agent</div></div>
+    <div class="am-header-buttons">
+      <div class="am-circle am-glass"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M8 2.2c-2.3 0-3.9 1.8-3.9 4v2.4L2.8 11h10.4l-1.3-2.4V6.2c0-2.2-1.6-4-3.9-4zM6.4 12.6a1.7 1.7 0 0 0 3.2 0"/></svg></div>
+      <div class="am-circle am-glass"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M2 4.5h12M2 8h12M2 11.5h12"/><circle cx="10" cy="4.5" r="1.6" fill="var(--am-window-bg)"/><circle cx="5.5" cy="8" r="1.6" fill="var(--am-window-bg)"/><circle cx="9" cy="11.5" r="1.6" fill="var(--am-window-bg)"/></svg></div>
+    </div>
+  </div>
+  <div class="am-filters">
+    <div class="am-cap am-glass t-waiting"><span class="am-dot"></span><span class="am-cap-count">2</span><span class="am-cap-title">等你</span></div>
+    <div class="am-cap am-glass t-completed"><span class="am-dot"></span><span class="am-cap-count">1</span><span class="am-cap-title">已完成</span></div>
+    <div class="am-cap am-glass t-running"><span class="am-dot"></span><span class="am-cap-count">2</span><span class="am-cap-title">运行中</span></div>
+    <div class="am-cap am-glass t-idle"><span class="am-dot"></span><span class="am-cap-count">2</span><span class="am-cap-title">空闲</span></div>
+  </div>
+  <div class="am-list">
+    <div class="am-section"><span class="am-dot t-waiting"></span>等你回复<span class="overdue">· 1 个已超时</span></div>
+
+    <div class="am-row s-waiting is-overdue is-selected">
+      <div class="am-icon"><img src="assets/codex-light.png"></div>
+      <div class="am-body">
+        <div class="am-line1"><span class="am-row-title">重构 Cookie 同步逻辑</span><span class="am-time"><svg viewBox="0 0 12 12" fill="currentColor"><path d="M6 1.2a4.8 4.8 0 1 0 0 9.6 4.8 4.8 0 0 0 0-9.6zm.5 2.3v2.3l1.8 1.1-.5.8L5.5 6.3V3.5z"/></svg>12 分钟</span></div>
+        <div class="am-line2"><span class="am-sub">Codex<span class="am-mid">·</span>115-cookie</span>
+          <span class="am-usage"><svg viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="none" stroke="currentColor" stroke-opacity=".25" stroke-width="1.6"/><circle cx="5" cy="5" r="4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-dasharray="9.5 25.1" transform="rotate(-90 5 5)"/></svg>38%</span></div>
+        <div class="am-ask"><span class="am-ask-label">等待授权</span><span class="am-ask-detail is-cmd">git push --force origin main</span></div>
+      </div>
+    </div>
+
+    <div class="am-row s-waiting">
+      <div class="am-icon"><img src="assets/claude.png"></div>
+      <div class="am-body">
+        <div class="am-line1"><span class="am-row-title">多 agent 会话监控面板</span><span class="am-time">1 分钟</span></div>
+        <div class="am-line2"><span class="am-sub">Claude Code<span class="am-mid">·</span>agent-monitor</span><span class="am-usage">460k</span></div>
+        <div class="am-ask"><span class="am-ask-label">在问你</span><span class="am-ask-detail">第一版做成哪种形态？</span></div>
+      </div>
+    </div>
+
+    <div class="am-section"><span class="am-dot t-completed"></span>已完成</div>
+    <div class="am-row s-completed">
+      <div class="am-icon"><img src="assets/antigravity.png"></div>
+      <div class="am-body">
+        <div class="am-line1"><span class="am-row-title">Loon 规则整理</span><span class="am-time">12 分钟前</span></div>
+        <div class="am-line2"><span class="am-sub">Antigravity<span class="am-mid">·</span>loon-rea</span><span class="am-usage">86 步</span></div>
+        <div class="am-done"><svg viewBox="0 0 12 12"><circle cx="6" cy="6" r="6" fill="currentColor"/><path d="M3.4 6.2l1.8 1.8 3.4-3.6" stroke="#fff" stroke-width="1.3" fill="none"/></svg><span>已生成 3 个文件，测试全部通过</span></div>
+      </div>
+    </div>
+
+    <div class="am-section"><span class="am-dot t-running"></span>运行中</div>
+    <div class="am-row s-running">
+      <div class="am-icon"><img src="assets/dsh.png"></div>
+      <div class="am-body">
+        <div class="am-line1"><span class="am-row-title">iStat Menus 显示模块分析</span><span class="am-time">2:33</span></div>
+        <div class="am-line2"><span class="am-sub">DeepSeek Harness<span class="am-mid">·</span>istat-menus-rea</span></div>
+        <div class="am-run"><span class="am-pulse"></span><span>正在运行 Bash<span class="am-mid">·</span>pnpm test</span></div>
+      </div>
+    </div>
+    <div class="am-row s-running">
+      <div class="am-icon"><img src="assets/claude.png"></div>
+      <div class="am-body">
+        <div class="am-line1"><span class="am-row-title">Hyperknow 学习要点</span><span class="am-time">0:50</span></div>
+        <div class="am-line2"><span class="am-sub">Claude Code<span class="am-mid">·</span>ai-plan-pilot</span><span class="am-usage warn">812k</span></div>
+        <div class="am-run"><span class="am-pulse"></span><span>正在思考…</span></div>
+      </div>
+    </div>
+    <div class="am-idle-head"><span class="am-dot"></span><span>空闲 · 2 个会话</span><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3.5 2l3 3-3 3"/></svg></div>
+  </div>
+  <div class="am-bottom"><div class="am-big am-glass"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2.5 7.5l3 3 6-7"/></svg>全部标为已读</div></div>
+  <div class="am-hints"><span><b>↑↓</b> 选择</span><span><b>↩</b> 跳转</span><span><b>⌫</b> 已读</span><span><b>1–4</b> 筛选</span><span><b>esc</b> 关闭</span></div>
+</div></div></div>
+</div>
+<p class="cap">浅色。提示条 <span class="new">NEW</span> 只在键盘选中态存在时显示，鼠标移动后消失（见 SPEC F4）。</p>
+</div>
+
+<div>
+<div class="stage dark">
+<div class="am dark"><div class="am-window"><div class="am-inner">
+  <div class="am-header">
+    <div class="am-header-text"><div class="am-title">Agent 会话</div><div class="am-subtitle">5 个活跃<span class="am-mid">·</span>4 个 agent</div></div>
+    <div class="am-header-buttons">
+      <div class="am-circle am-glass"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M8 2.2c-2.3 0-3.9 1.8-3.9 4v2.4L2.8 11h10.4l-1.3-2.4V6.2c0-2.2-1.6-4-3.9-4zM6.4 12.6a1.7 1.7 0 0 0 3.2 0"/></svg></div>
+      <div class="am-circle am-glass"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M2 4.5h12M2 8h12M2 11.5h12"/></svg></div>
+    </div>
+  </div>
+  <div class="am-filters">
+    <div class="am-cap am-glass t-waiting"><span class="am-dot"></span><span class="am-cap-count">2</span><span class="am-cap-title">等你</span></div>
+    <div class="am-cap am-glass t-completed"><span class="am-dot"></span><span class="am-cap-count">1</span><span class="am-cap-title">已完成</span></div>
+    <div class="am-cap am-glass t-running"><span class="am-dot"></span><span class="am-cap-count">2</span><span class="am-cap-title">运行中</span></div>
+    <div class="am-cap am-glass t-idle"><span class="am-dot"></span><span class="am-cap-count">2</span><span class="am-cap-title">空闲</span></div>
+  </div>
+  <div class="am-list">
+    <div class="am-section"><span class="am-dot t-waiting"></span>等你回复<span class="overdue">· 1 个已超时</span></div>
+    <div class="am-row s-waiting is-overdue">
+      <div class="am-icon"><img src="assets/codex-dark.png"></div>
+      <div class="am-body">
+        <div class="am-line1"><span class="am-row-title">重构 Cookie 同步逻辑</span><span class="am-time"><svg viewBox="0 0 12 12" fill="currentColor"><path d="M6 1.2a4.8 4.8 0 1 0 0 9.6 4.8 4.8 0 0 0 0-9.6zm.5 2.3v2.3l1.8 1.1-.5.8L5.5 6.3V3.5z"/></svg>12 分钟</span></div>
+        <div class="am-line2"><span class="am-sub">Codex<span class="am-mid">·</span>115-cookie</span><span class="am-usage is-hover"><svg viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="none" stroke="currentColor" stroke-opacity=".25" stroke-width="1.6"/><circle cx="5" cy="5" r="4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-dasharray="9.5 25.1" transform="rotate(-90 5 5)"/></svg>38%</span></div>
+        <div class="am-ask"><span class="am-ask-label">等待授权</span><span class="am-ask-detail is-cmd">git push --force origin main</span></div>
+      </div>
+    </div>
+    <div class="am-row s-waiting is-hover">
+      <div class="am-icon"><img src="assets/claude.png"></div>
+      <div class="am-body">
+        <div class="am-line1"><span class="am-row-title">多 agent 会话监控面板</span><span class="am-time">1 分钟</span></div>
+        <div class="am-line2"><span class="am-sub">Claude Code<span class="am-mid">·</span>agent-monitor</span><span class="am-usage">460k</span></div>
+        <div class="am-ask"><span class="am-ask-label">在问你</span><span class="am-ask-detail">第一版做成哪种形态？</span></div>
+      </div>
+    </div>
+    <div class="am-section"><span class="am-dot t-completed"></span>已完成</div>
+    <div class="am-row s-completed">
+      <div class="am-icon"><img src="assets/antigravity.png"></div>
+      <div class="am-body">
+        <div class="am-line1"><span class="am-row-title">Loon 规则整理</span><span class="am-time">12 分钟前</span></div>
+        <div class="am-line2"><span class="am-sub">Antigravity<span class="am-mid">·</span>loon-rea</span><span class="am-usage">86 步</span></div>
+        <div class="am-done"><svg viewBox="0 0 12 12"><circle cx="6" cy="6" r="6" fill="currentColor"/><path d="M3.4 6.2l1.8 1.8 3.4-3.6" stroke="#000" stroke-width="1.3" fill="none"/></svg><span>已生成 3 个文件，测试全部通过</span></div>
+      </div>
+    </div>
+    <div class="am-section"><span class="am-dot t-running"></span>运行中</div>
+    <div class="am-row s-running">
+      <div class="am-icon"><img src="assets/claude.png"></div>
+      <div class="am-body">
+        <div class="am-line1"><span class="am-row-title">Hyperknow 学习要点</span><span class="am-time">0:50</span></div>
+        <div class="am-line2"><span class="am-sub">Claude Code<span class="am-mid">·</span>ai-plan-pilot</span><span class="am-usage crit">1.02M</span></div>
+        <div class="am-run"><span class="am-pulse"></span><span>正在思考…</span></div>
+      </div>
+    </div>
+    <div class="am-idle-head"><span class="am-dot"></span><span>空闲 · 2 个会话</span><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3.5 2l3 3-3 3"/></svg></div>
+  </div>
+  <div class="am-bottom"><div class="am-big am-glass"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2.5 7.5l3 3 6-7"/></svg>全部标为已读</div></div>
+</div></div></div>
+</div>
+<p class="cap">深色，鼠标模式：没有键盘选中态，也没有提示条。第一行的用量标签处于悬停态（底色 fill-tertiary）。</p>
+</div>
+</div>
+
+<!-- ======================================================================= -->
+<h2 id="states">2. 新增行状态细节</h2>
+<table class="spec">
+<tr><th>元素</th><th>规格</th><th>SwiftUI 写法</th></tr>
+<tr><td>超时时间文字 <span class="new">NEW</span></td><td>11pt semibold，systemRed；前缀 11pt 闹钟图标，间距 3pt。文字仍是等待时长（「12 分钟」）</td><td><code>Label { Text } icon: { Image(systemName: "alarm.fill") }</code>，<code>.foregroundStyle(.red)</code></td></tr>
+<tr><td>分组标题超时计数 <span class="new">NEW</span></td><td>紧跟「等你回复」，10pt semibold，systemRed，文字「· N 个已超时」。N = 0 时不显示</td><td>在 <code>sectionHeader</code> 增加可选 <code>trailing: Text?</code></td></tr>
+<tr><td>键盘选中态 <span class="new">NEW</span></td><td>底色同悬停（<code>.fill.quaternary</code>）+ 内描边 1.5pt，accentColor 70% 不透明度，圆角 12（continuous）</td><td><code>.overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.accentColor.opacity(0.7), lineWidth: 1.5))</code></td></tr>
+<tr><td>用量标签 <span class="new">NEW</span></td><td>放在第二行（<code>agent · 目录</code>）末尾，右对齐；10.5pt，等宽数字，secondary 色；左右内边距 5pt，圆角 5pt；悬停时底色 <code>.fill.tertiary</code>、文字变 primary，停留 0.4s 后弹出第 4 节的浮层</td><td>第二行改成 <code>HStack(alignment: .firstTextBaseline) { Text(sub); Spacer(minLength: 8); UsageChip }</code></td></tr>
+<tr><td>用量标签内容</td><td>已知上下文窗口：10pt 圆环 + 百分比（「38%」）。只知道上下文 token 数：「460k」。只有步数（Antigravity）：「86 步」。没有数据（dsh）：不显示</td><td>环形用 <code>Circle().trim(from:0,to:p).stroke(lineWidth:1.6)</code> 叠在 25% 不透明度的底环上</td></tr>
+<tr><td>用量标签颜色</td><td>百分比 ≥ 80%，或无窗口时上下文 ≥ 800k：orange；≥ 95%，或 ≥ 1M：red；其余 secondary</td><td>见 SPEC F6「阈值」</td></tr>
+<tr><td>快捷键提示条 <span class="new">NEW</span></td><td>放在「全部标为已读」按钮下方（没有该按钮时放在列表下方）；10pt，tertiary 色，键名 semibold secondary 色；项间距 10pt，居中，上边距 2pt。只在键盘选中态存在时显示，淡入淡出 0.15s</td><td>放进 <code>MenuView</code> 的 <code>VStack</code>，跟在 <code>SessionList</code> 后面</td></tr>
+</table>
+
+<!-- ======================================================================= -->
+<h2 id="menus">3. 行右键菜单 / 齿轮菜单</h2>
+<p class="note">右键会话行（或键盘选中后按 <kbd>⇧F10</kbd> / <kbd>⌃↩</kbd>）弹出系统原生 <code>contextMenu</code>。第一项下方的灰字是「跳转目标预览」，由 F1 的解析结果生成，告诉用户点了会去哪里。</p>
+<div class="row">
+<div class="stage"><div class="am light" style="display:flex;gap:28px;align-items:flex-start">
+  <div class="mac-menu">
+    <div class="mm-item is-hover"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M9 3h4v4M13 3L7 9M11 9v4H3V5h4"/></svg>跳转到会话<span class="kbd">↩</span></div>
+    <div class="mm-sub">Warp · 窗口「✳ 多 agent 会话监控面板」</div>
+    <div class="mm-item is-disabled"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M3 8.5l3 3 7-7"/></svg>标为已读<span class="kbd">⌫</span></div>
+    <div class="mm-sep"></div>
+    <div class="mm-item"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 4.5h4l1.5 1.5H14v6.5H2z"/></svg>在访达中显示目录</div>
+    <div class="mm-item"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="5" y="5" width="8" height="9" rx="1.5"/><path d="M3 11V3.5A1.5 1.5 0 0 1 4.5 2H10"/></svg>拷贝目录路径</div>
+    <div class="mm-item"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="5" y="5" width="8" height="9" rx="1.5"/><path d="M3 11V3.5A1.5 1.5 0 0 1 4.5 2H10"/></svg>拷贝会话 ID</div>
+    <div class="mm-sep"></div>
+    <div class="mm-item"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M8 2.5c-2.2 0-3.7 1.7-3.7 3.8v2.2L3 11h10l-1.3-2.5V6.3"/><path d="M2.5 2.5l11 11"/></svg>静音此项目<svg class="chev" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3.5 2l3 3-3 3"/></svg></div>
+    <div class="mm-item"><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 8s2.3-4 6-4 6 4 6 4-2.3 4-6 4-6-4-6-4z"/><path d="M2.5 2.5l11 11"/></svg>在面板中隐藏此项目</div>
+  </div>
+  <div class="mac-menu" style="margin-top:150px;width:200px">
+    <div class="mm-item is-hover">所有通知</div>
+    <div class="mm-item">仅「已完成」通知</div>
+  </div>
+  <div class="mac-menu" style="width:220px">
+    <div class="mm-item"><span class="mm-check"></span>设置…<span class="kbd">⌘,</span></div>
+    <div class="mm-item"><span class="mm-check">✓</span>开机启动</div>
+    <div class="mm-sep"></div>
+    <div class="mm-item"><span class="mm-check"></span>退出 Agent Monitor<span class="kbd">⌘Q</span></div>
+  </div>
+</div></div>
+</div>
+<p class="cap">左：行右键菜单（「标为已读」只对已完成会话可用）。中：「静音此项目」子菜单。右：齿轮菜单，新增「设置…」作为第一项 <span class="new">NEW</span>。</p>
+
+<!-- ======================================================================= -->
+<h2 id="popover">4. Token 用量浮层</h2>
+<p class="note">鼠标在用量标签上停留 0.4s 后，在标签下方弹出 <code>.popover(arrowEdge: .bottom)</code>，移开即关闭。三种 agent 各一份，没有的字段整行不显示，不要写「—」。</p>
+<div class="row">
+<div class="stage"><div class="am light" style="display:flex;gap:28px;align-items:flex-start">
+  <div class="popover">
+    <div class="pv-title">上下文<span>gpt-6-astra</span></div>
+    <div class="pv-gauge"><i style="width:38%"></i></div>
+    <div class="pv-row"><span>已用 / 窗口</span><span>98.2k / 258.4k</span></div>
+    <div class="pv-sep"></div>
+    <div class="pv-row"><span>本会话输入</span><span>663.9k</span></div>
+    <div class="pv-row"><span>其中缓存命中</span><span>624.5k</span></div>
+    <div class="pv-row"><span>输出</span><span>4.6k</span></div>
+    <div class="pv-row"><span>其中推理</span><span>69</span></div>
+    <div class="pv-foot">来自本地会话记录，不含费用 · 更新于 3 秒前</div>
+  </div>
+  <div class="popover">
+    <div class="pv-title">上下文<span>claude-opus-5-5</span></div>
+    <div class="pv-row"><span>当前上下文</span><span>459.6k</span></div>
+    <div class="pv-sep"></div>
+    <div class="pv-row"><span>本会话输入</span><span>26</span></div>
+    <div class="pv-row"><span>缓存写入</span><span>62.8k</span></div>
+    <div class="pv-row"><span>缓存读取</span><span>5.65M</span></div>
+    <div class="pv-row"><span>输出</span><span>5.1k</span></div>
+    <div class="pv-row"><span>模型请求</span><span>13 次</span></div>
+    <div class="pv-foot">来自本地会话记录，不含费用 · 更新于刚刚</div>
+  </div>
+  <div class="popover">
+    <div class="pv-title">会话进度<span>Antigravity</span></div>
+    <div class="pv-row"><span>已执行步骤</span><span>86</span></div>
+    <div class="pv-foot">Antigravity 本地数据不含 token 用量</div>
+  </div>
+</div></div>
+</div>
+<p class="cap">左 Codex（有窗口大小，显示进度条；进度条颜色跟随标签阈值色）；中 Claude Code（无窗口大小，不画进度条）；右 Antigravity。</p>
+
+<!-- ======================================================================= -->
+<h2 id="notify">5. 通知与菜单栏</h2>
+<div class="row">
+<div class="stage">
+  <div class="nt" style="margin-bottom:12px"><img class="app" src="assets/agentmonitor.png"><div class="tx"><b>Codex · 重构 Cookie 同步逻辑</b><div>仍在等你 · 已等 10 分钟</div><div class="cmd">git push --force origin main</div></div><img class="att" src="assets/codex-light.png"></div>
+  <div class="nt"><img class="app" src="assets/agentmonitor.png"><div class="tx"><b>Claude Code · 多 agent 会话监控面板</b><div>仍在等你 · 已等 5 分钟</div><div>第一版做成哪种形态？</div></div><img class="att" src="assets/claude.png"></div>
+  <p class="cap">再次提醒通知 <span class="new">NEW</span>：结构与现有等待通知一致，只把副标题从「等待授权 / 在问你」改成「仍在等你 · 已等 N 分钟」。<br>同一会话的再次提醒会替换上一条提醒（相同 request identifier），不会在通知中心堆积。</p>
+</div>
+<div class="stage" style="min-width:420px">
+  <div style="display:flex;flex-direction:column;gap:14px;align-items:flex-start">
+    <div class="mb"><span>…</span>
+      <svg width="40" height="16" viewBox="0 0 40 16"><rect x="1" y="2" width="13" height="12" rx="3" fill="none" stroke="#000" stroke-width="1.4"/><circle cx="12.5" cy="3.5" r="2.6" fill="#ff8d28" stroke="#fff" stroke-width="1"/><rect x="18" y="0.5" width="16" height="15" rx="7.5" fill="#C2410C"/><text x="26" y="11.6" font-size="10.5" font-weight="700" fill="#fff" text-anchor="middle" font-family="-apple-system">2</text></svg>
+      <span style="font-size:12px;color:#6e6e73">普通等待（现状）</span></div>
+    <div class="mb"><span>…</span>
+      <svg width="40" height="16" viewBox="0 0 40 16"><rect x="1" y="2" width="13" height="12" rx="3" fill="none" stroke="#000" stroke-width="1.4"/><circle cx="12.5" cy="3.5" r="2.6" fill="#ff8d28" stroke="#fff" stroke-width="1"/><rect x="18" y="0.5" width="16" height="15" rx="7.5" fill="#D70015"/><text x="26" y="11.6" font-size="10.5" font-weight="700" fill="#fff" text-anchor="middle" font-family="-apple-system">2</text></svg>
+      <span style="font-size:12px;color:#6e6e73">有会话超时 <span class="new">NEW</span>：角标底色 #D70015</span></div>
+    <div class="mb dark"><span>…</span>
+      <svg width="40" height="16" viewBox="0 0 40 16"><rect x="1" y="2" width="13" height="12" rx="3" fill="none" stroke="#fff" stroke-width="1.4"/><circle cx="12.5" cy="3.5" r="2.6" fill="#ffb44f" stroke="#1e1e20" stroke-width="1"/><rect x="18" y="0.5" width="16" height="15" rx="7.5" fill="#D70015"/><text x="26" y="11.6" font-size="10.5" font-weight="700" fill="#fff" text-anchor="middle" font-family="-apple-system">2</text></svg>
+      <span style="font-size:12px;color:#aaa">深色菜单栏同色</span></div>
+  </div>
+  <p class="cap">角标只换颜色，尺寸和数字不变。白字在 #D70015 上的对比度约 5.6:1，满足 ≥ 4.5:1 的要求；现有橙色角标 #C2410C 不变。示意图里的图标是简化画法，实现时沿用 <code>MenuBarIconRenderer</code> 现有绘制，只给角标颜色加一个分支。</p>
+</div>
+</div>
+
+<!-- ======================================================================= -->
+<h2 id="settings">6. 设置窗口</h2>
+<p class="note">
+  独立窗口，宽 600pt，高度随内容变化。工具栏分 6 页：通用、通知、Agent、静音、集成、快捷键。每页都用 <code>Form { Section }</code> + <code>.formStyle(.grouped)</code>，下面的样式就是 grouped Form 在 macOS 26 上的外观，不要手画。
+  从齿轮菜单「设置…」、<kbd>⌘,</kbd>（面板打开时）、首次运行后的通知点击打开；打开时 app 临时切换为 <code>.regular</code> 激活策略以获得焦点，窗口关闭后切回 <code>.accessory</code>（见 SPEC F3）。
+</p>
+
+<div class="row">
+<!-- ---- 通用 ---- -->
+<div><div class="sw">
+  <div class="sw-bar"><div class="sw-lights"><i></i><i></i><i></i></div><div class="sw-name">通用</div>
+    <div class="sw-tabs">
+      <div class="sw-tab on"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="10" cy="10" r="3"/><path d="M10 2v2.5M10 15.5V18M2 10h2.5M15.5 10H18M4.3 4.3l1.8 1.8M13.9 13.9l1.8 1.8M4.3 15.7l1.8-1.8M13.9 6.1l1.8-1.8"/></svg>通用</div>
+      <div class="sw-tab"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M10 3c-2.8 0-4.8 2.2-4.8 5v3L3.5 14h13l-1.7-3V8c0-2.8-2-5-4.8-5zM8 16a2 2 0 0 0 4 0"/></svg>通知</div>
+      <div class="sw-tab"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="3" y="3" width="6" height="6" rx="1.5"/><rect x="11" y="3" width="6" height="6" rx="1.5"/><rect x="3" y="11" width="6" height="6" rx="1.5"/><rect x="11" y="11" width="6" height="6" rx="1.5"/></svg>Agent</div>
+      <div class="sw-tab"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M10 3c-2.8 0-4.8 2.2-4.8 5v3L3.5 14h13l-1.7-3V8"/><path d="M3 3l14 14"/></svg>静音</div>
+      <div class="sw-tab"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 4v4M12 4v4M6 8h8v3a4 4 0 0 1-8 0zM10 15v2"/></svg>集成</div>
+      <div class="sw-tab"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="5" width="16" height="10" rx="2"/><path d="M5 8h1M8 8h1M11 8h1M14 8h1M6 12h8"/></svg>快捷键</div>
+    </div></div>
+  <div class="sw-body">
+    <div><div class="grp">
+      <div class="it"><div class="lbl">开机时启动</div><div class="tg on"></div></div>
+      <div class="it"><div class="lbl">显示最近<small>超过这个时长没有活动的会话不再出现在面板里</small></div><div class="pop">6 小时</div></div>
+      <div class="it"><div class="lbl">默认展开空闲会话</div><div class="tg"></div></div>
+    </div></div>
+    <div><div class="grp-h">面板与菜单栏</div><div class="grp">
+      <div class="it"><div class="lbl">显示 Token 用量<small>在每个会话的第二行末尾显示上下文占用</small></div><div class="tg on"></div></div>
+      <div class="it"><div class="lbl">菜单栏图标显示等待数量</div><div class="tg on"></div></div>
+    </div></div>
+  </div>
+</div><p class="cap">「显示最近」选项：1 小时 / 3 小时 / 6 小时 / 12 小时 / 24 小时，默认 6 小时。</p></div>
+
+<!-- ---- 通知 ---- -->
+<div><div class="sw">
+  <div class="sw-bar"><div class="sw-lights"><i></i><i></i><i></i></div><div class="sw-name">通知</div>
+    <div class="sw-tabs"><div class="sw-tab">通用</div><div class="sw-tab on">通知</div><div class="sw-tab">Agent</div><div class="sw-tab">静音</div><div class="sw-tab">集成</div><div class="sw-tab">快捷键</div></div></div>
+  <div class="sw-body">
+    <div><div class="grp-h">什么时候通知</div><div class="grp">
+      <div class="it"><div class="lbl">会话等你回复</div><div class="pop">默认</div><div class="tg on"></div></div>
+      <div class="it"><div class="lbl">任务完成</div><div class="pop">Glass</div><div class="tg on"></div></div>
+      <div class="it"><div class="lbl">只通知运行超过此时长的任务<small>短于这个时长的任务完成时不打扰你</small></div><div class="pop">10 秒</div></div>
+    </div></div>
+    <div><div class="grp-h">再次提醒</div><div class="grp">
+      <div class="it"><div class="lbl">等待太久时再次提醒</div><div class="tg on"></div></div>
+      <div class="it"><div class="lbl">等待超过</div><div class="pop">5 分钟</div></div>
+      <div class="it"><div class="lbl">最多提醒</div><div class="pop">2 次</div></div>
+      <div class="it"><div class="lbl">超时后菜单栏角标变红</div><div class="tg on"></div></div>
+    </div><div class="grp-f">之后每隔同样时长提醒一次，直到达到次数上限。会话离开「等你回复」后重新计时。</div></div>
+    <div><div class="grp-h">免打扰</div><div class="grp">
+      <div class="it"><div class="lbl">面板打开时不弹出通知</div><div class="tg on"></div></div>
+    </div><div class="grp-f">菜单栏铃铛按钮可暂停全部通知 1 小时。</div></div>
+  </div>
+</div><p class="cap">声音弹出菜单：「默认」+ <code>/System/Library/Sounds</code> 下的系统音（Glass、Ping、Hero…）+「无」，选中即试听。时长弹出菜单：0 秒（全部通知）/ 10 秒 / 30 秒 / 1 分钟 / 5 分钟。<br>等待超过：3 / 5 / 10 / 15 / 30 分钟；最多提醒：1 / 2 / 3 / 5 次。</p></div>
+
+<!-- ---- Agent ---- -->
+<div><div class="sw">
+  <div class="sw-bar"><div class="sw-lights"><i></i><i></i><i></i></div><div class="sw-name">Agent</div>
+    <div class="sw-tabs"><div class="sw-tab">通用</div><div class="sw-tab">通知</div><div class="sw-tab on">Agent</div><div class="sw-tab">静音</div><div class="sw-tab">集成</div><div class="sw-tab">快捷键</div></div></div>
+  <div class="sw-body">
+    <div><div class="grp">
+      <div class="it"><img class="agent-ico" src="assets/claude.png"><div class="lbl">Claude Code<small><span class="pill ok">● 已检测到</span>　<span class="path">~/.claude</span> · 3 个会话</small></div><div class="tg on"></div></div>
+      <div class="it"><img class="agent-ico" src="assets/codex-light.png"><div class="lbl">Codex<small><span class="pill ok">● 已检测到</span>　<span class="path">~/.codex</span> · 1 个会话</small></div><div class="tg on"></div></div>
+      <div class="it"><img class="agent-ico" src="assets/dsh.png"><div class="lbl">DeepSeek Harness<small><span class="pill ok">● 已检测到</span>　<span class="path">~/.dsh</span> · 0 个会话</small></div><div class="tg on"></div></div>
+      <div class="it"><img class="agent-ico" src="assets/antigravity.png"><div class="lbl">Antigravity<small><span class="pill off">未找到数据目录</span>　<span class="path">~/.gemini/antigravity</span></small></div><div class="tg"></div></div>
+    </div><div class="grp-f">关闭后不再扫描该 agent 的数据，也不会收到它的通知。会话数只统计「显示最近」时间范围内的会话。</div></div>
+  </div>
+</div></div>
+
+<!-- ---- 静音 ---- -->
+<div><div class="sw">
+  <div class="sw-bar"><div class="sw-lights"><i></i><i></i><i></i></div><div class="sw-name">静音</div>
+    <div class="sw-tabs"><div class="sw-tab">通用</div><div class="sw-tab">通知</div><div class="sw-tab">Agent</div><div class="sw-tab on">静音</div><div class="sw-tab">集成</div><div class="sw-tab">快捷键</div></div></div>
+  <div class="sw-body">
+    <div><div class="grp-h">静音的项目目录</div><div class="grp">
+      <table class="tbl">
+        <tr><th>目录</th><th style="width:150px">静音范围</th><th style="width:80px">面板中隐藏</th></tr>
+        <tr><td class="path">~/Documents/Codex</td><td><span class="pop">所有通知</span></td><td><span class="chk">✓</span></td></tr>
+        <tr class="sel"><td class="path">~/code/archive</td><td><span class="pop">仅「已完成」通知</span></td><td><span class="chk off">✓</span></td></tr>
+        <tr><td class="path">/private/tmp</td><td><span class="pop">所有通知</span></td><td><span class="chk off">✓</span></td></tr>
+      </table>
+      <div class="pm"><span>+</span><span>−</span></div>
+    </div><div class="grp-f">会话的工作目录等于或位于某条规则的目录之下时生效；同时命中多条规则时取最长的那条。也可以在面板里右键会话 →「静音此项目」。<br>「+」打开目录选择面板。规则为空时显示：「没有静音的项目」。</div></div>
+  </div>
+</div></div>
+
+<!-- ---- 集成 ---- -->
+<div><div class="sw">
+  <div class="sw-bar"><div class="sw-lights"><i></i><i></i><i></i></div><div class="sw-name">集成</div>
+    <div class="sw-tabs"><div class="sw-tab">通用</div><div class="sw-tab">通知</div><div class="sw-tab">Agent</div><div class="sw-tab">静音</div><div class="sw-tab on">集成</div><div class="sw-tab">快捷键</div></div></div>
+  <div class="sw-body">
+    <div><div class="grp-h">Claude Code Hooks（实验性）</div><div class="grp">
+      <div class="it"><img class="agent-ico" src="assets/claude.png"><div class="lbl">状态实时同步<small>在 <span class="path">~/.claude/settings.json</span> 中加入 7 个异步 hook。状态变化会立即反映到面板，不必等文件扫描；授权请求会显示原始提示文字。</small></div><span class="pill off">未安装</span></div>
+      <div class="it" style="justify-content:flex-end;gap:8px"><div class="btn">查看改动…</div><div class="btn pri">安装</div></div>
+    </div><div class="grp-f">hook 以 <code>async</code> 方式运行，不会拖慢 Claude Code。卸载时只删除 Agent Monitor 写入的条目，你自己的 hook 保持不变。</div></div>
+
+    <div><div class="grp">
+      <div class="it"><img class="agent-ico" src="assets/claude.png"><div class="lbl">状态实时同步<small>最近一次事件：3 秒前（Stop）</small></div><span class="pill ok">● 已安装</span></div>
+      <div class="it" style="justify-content:flex-end;gap:8px"><div class="btn danger">卸载</div></div>
+    </div><div class="grp-f">↑ 已安装时的样子。配置被手动改动、条目不完整时显示 <span class="pill warn">需要修复</span>，按钮变为「修复」。</div></div>
+
+    <div><div class="grp-h">权限</div><div class="grp">
+      <div class="it"><div class="lbl">辅助功能<small>用于跳转时把正确的终端窗口带到最前（Warp、Ghostty、kitty 等）</small></div><span class="pill ok">● 已授权</span></div>
+      <div class="it"><div class="lbl">自动化 · iTerm2 / 终端<small>用于跳转到具体的标签页；第一次跳转时系统会询问</small></div><span class="pill off">未请求</span><div class="btn">打开系统设置</div></div>
+    </div></div>
+  </div>
+</div></div>
+
+<!-- ---- 快捷键 ---- -->
+<div><div class="sw">
+  <div class="sw-bar"><div class="sw-lights"><i></i><i></i><i></i></div><div class="sw-name">快捷键</div>
+    <div class="sw-tabs"><div class="sw-tab">通用</div><div class="sw-tab">通知</div><div class="sw-tab">Agent</div><div class="sw-tab">静音</div><div class="sw-tab">集成</div><div class="sw-tab on">快捷键</div></div></div>
+  <div class="sw-body">
+    <div><div class="grp-h">全局快捷键</div><div class="grp">
+      <div class="it"><div class="lbl">打开 / 关闭面板</div><div class="rec">⌃⌥A<span class="x">✕</span></div></div>
+      <div class="it"><div class="lbl">跳到等待最久的会话<small>不打开面板，直接跳转；没有等待的会话时跳到最近完成的会话</small></div><div class="rec recording">请按快捷键…</div></div>
+    </div><div class="grp-f">点击录制框后按下组合键，至少包含 ⌘、⌃、⌥ 之一；按 esc 取消，按 ⌫ 清除。与系统或其他 app 冲突时录制框下方显示红字「该快捷键已被占用」。</div></div>
+    <div><div class="grp-h">面板内</div><div class="grp"><div class="kmap">
+      <kbd>↑ ↓</kbd><span>选择会话</span>
+      <kbd>↩</kbd><span>跳转到选中的会话（已完成的同时标为已读）</span>
+      <kbd>⌫</kbd><span>把选中的已完成会话标为已读</span>
+      <kbd>⌘⌫</kbd><span>全部标为已读</span>
+      <kbd>1 2 3 4</kbd><span>切换筛选：等你 / 已完成 / 运行中 / 空闲（再按一次取消）</span>
+      <kbd>esc</kbd><span>有筛选时清除筛选，否则关闭面板</span>
+      <kbd>⌘,</kbd><span>打开设置</span>
+    </div></div></div>
+  </div>
+</div><p class="cap">录制中状态：2pt 强调色内描边，文字「请按快捷键…」。</p></div>
+</div>
+
+<!-- ======================================================================= -->
+<h2 id="sheet">7. Hooks 安装确认</h2>
+<p class="note">在「集成」页点「安装」或「查看改动…」时，以 sheet 形式弹出。展示的是将要合并进 <code>~/.claude/settings.json</code> 的完整片段（真实内容由代码生成，不要写死）。</p>
+<div class="row"><div class="stage"><div class="sw" style="width:auto;background:none;box-shadow:none">
+<div class="sheet">
+  <h4>安装 Claude Code Hooks</h4>
+  <p>Agent Monitor 会在 <span class="path">~/.claude/settings.json</span> 的 <code>hooks</code> 中追加以下条目。已有的配置不会改动，写入前会自动备份。新开的 Claude Code 会话会使用新配置；已经打开的会话可能需要重启才能生效。写入后文件的键顺序和缩进可能变化，内容不变。</p>
+<pre class="diff">{
+  "hooks": {
+<span class="a">    "SessionStart":      [{ "matcher": "*", "hooks": [{ "type": "command", "async": true, "timeout": 5,
+                             "command": "\"$HOME/Library/Application Support/AgentMonitor/hooks/cc-event.sh\"" }] }],</span>
+<span class="a">    "UserPromptSubmit":  [{ "hooks": [{ … 同上 … }] }],</span>
+<span class="a">    "PermissionRequest": [{ "matcher": "*", "hooks": [{ … }] }],</span>
+<span class="a">    "Notification":      [{ "matcher": "*", "hooks": [{ … }] }],</span>
+<span class="a">    "Stop":              [{ "hooks": [{ … }] }],</span>
+<span class="a">    "StopFailure":       [{ "matcher": "*", "hooks": [{ … }] }],</span>
+<span class="a">    "SessionEnd":        [{ "matcher": "*", "hooks": [{ … }] }]</span>
+  }
+}</pre>
+  <div class="acts"><div class="lft"><span class="chk">✓</span>写入前备份为 settings.json.agentmonitor-backup</div><div class="btn">取消</div><div class="btn pri">安装</div></div>
+</div></div></div></div>
+
+<!-- ======================================================================= -->
+<h2 id="keys">8. 交互与 AX 名称速查</h2>
+<table class="spec">
+<tr><th>交互</th><th>结果</th><th>AX 名称（供 panel-probe 测试）</th></tr>
+<tr><td>点击会话行</td><td>F1 跳转；已完成会话同时标为已读（现状保持）</td><td>行：<code>标题、时间、agent · 目录、…</code>（不变），用量标签追加到末尾，例如 <code>…、上下文 38%</code></td></tr>
+<tr><td>右键会话行</td><td>第 3 节菜单</td><td>菜单项名称同显示文字</td></tr>
+<tr><td>悬停用量标签 0.4s</td><td>第 4 节浮层</td><td>标签：<code>上下文 38%</code> / <code>上下文 460k</code> / <code>86 步</code></td></tr>
+<tr><td>齿轮 → 设置…</td><td>打开设置窗口（已打开则置前）</td><td><code>设置…</code></td></tr>
+<tr><td>全局 <kbd>⌃⌥A</kbd></td><td>切换面板显示</td><td>—</td></tr>
+<tr><td>全局「跳到等待最久的会话」</td><td>直接执行 F1 跳转</td><td>—</td></tr>
+<tr><td>面板内 <kbd>↓</kbd></td><td>出现键盘选中态与提示条</td><td>选中行的 AX value：<code>已选中</code></td></tr>
+</table>
+
+</div>
+</body>
+</html>

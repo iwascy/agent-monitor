@@ -194,6 +194,53 @@ for isDark in [false, true] {
         proc.terminate()
         killAgentMonitor()
     }
+
+    // Settings pages capture (P2 requirement: 6 pages, light and dark modes)
+    let settingsPages = ["general", "notification", "agents", "mute", "integration", "hotkey"]
+    for page in settingsPages {
+        var env: [String: String] = [
+            "AGENT_MONITOR_OPEN_SETTINGS": "1",
+            "AGENT_MONITOR_SETTINGS_TAB": page,
+            "AGENT_MONITOR_COLOR_SCHEME": modeName
+        ]
+        let proc = launchApp(env: env)
+        if let rect = getStatusItemRect(pid: proc.processIdentifier) {
+            let clickPt = CGPoint(x: rect.midX, y: rect.midY)
+            clickAt(point: clickPt)
+            Thread.sleep(forTimeInterval: 1.0)
+
+            var settingsBounds: CGRect? = nil
+            let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+            for w in list {
+                let pid = w[kCGWindowOwnerPID as String] as? Int32 ?? 0
+                if pid == proc.processIdentifier {
+                    if let dict = w[kCGWindowBounds as String] as? [String: Any],
+                       let x = dict["X"] as? Double,
+                       let y = dict["Y"] as? Double,
+                       let width = dict["Width"] as? Double,
+                       let height = dict["Height"] as? Double,
+                       width >= 500 { // Settings window width is 600
+                        settingsBounds = CGRect(x: x, y: y, width: width, height: height)
+                        break
+                    }
+                }
+            }
+
+            if let b = settingsBounds {
+                let outPath = "\(destDir)/settings-\(page)-\(modeName).png"
+                let captureX = Int(b.origin.x - 10)
+                let captureY = Int(b.origin.y - 4)
+                let captureW = Int(b.size.width + 20)
+                let captureH = Int(b.size.height + 20)
+                _ = runBash("screencapture -R \(captureX),\(captureY),\(captureW),\(captureH) '\(outPath)'")
+                print("Captured: settings-\(page)-\(modeName).png")
+            } else {
+                print("Failed to find settings window bounds for \(page)-\(modeName)")
+            }
+        }
+        proc.terminate()
+        killAgentMonitor()
+    }
 }
 
 // Restore the user's original appearance and running app
