@@ -9,6 +9,8 @@ struct SessionRow: View {
     @LocalState private var isHovered = false
 
     var body: some View {
+        let isSelected = session.id == viewModel.keyboardSelectionID
+
         Button(action: {
             if session.state == .completed {
                 withAnimation(.smooth) {
@@ -36,20 +38,36 @@ struct SessionRow: View {
 
                     let cwdPart = session.cwd.map { ($0 as NSString).lastPathComponent } ?? ""
                     let sub = cwdPart.isEmpty ? session.kind.displayName : "\(session.kind.displayName) · \(cwdPart)"
-                    Text(sub)
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
+                    HStack(spacing: 4) {
+                        Text(sub)
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                        Spacer()
+                        if let usage = session.usage {
+                            UsageChip(usage: usage)
+                        }
+                    }
 
                     accessoryView
                 }
             }
             .padding(EdgeInsets(top: session.state == .running ? 7 : 8, leading: 8, bottom: session.state == .running ? 7 : 8, trailing: 8))
-            .background(isHovered ? AnyShapeStyle(.fill.quaternary) : AnyShapeStyle(Color.clear))
+            .background((isHovered || isSelected) ? AnyShapeStyle(.fill.quaternary) : AnyShapeStyle(Color.clear))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(isSelected ? Color.accentColor.opacity(0.7) : Color.clear, lineWidth: 1.5)
+            )
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .buttonStyle(.plain)
-        .onHover { isHovered = $0 }
+        .accessibilityValue(isSelected ? "已选中" : "")
+        .onHover { hovering in
+            isHovered = hovering
+            if hovering {
+                viewModel.keyboardSelectionID = nil
+            }
+        }
         .contextMenu {
             let targetDesc = SessionJumper.shared.describeTarget(for: session)
             Button {

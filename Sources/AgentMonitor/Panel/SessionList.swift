@@ -27,159 +27,170 @@ struct SessionList: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 6) {
-                let waitingSessions = viewModel.sessions.filter { $0.state == .waitingForUser }
-                let doneSessions = viewModel.sessions.filter { $0.state == .completed }
-                let runningSessions = viewModel.sessions.filter { $0.state == .running }
-                let idleSessions = viewModel.sessions.filter { $0.state == .idle }
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    let waitingSessions = viewModel.sessions.filter { $0.state == .waitingForUser }
+                    let doneSessions = viewModel.sessions.filter { $0.state == .completed }
+                    let runningSessions = viewModel.sessions.filter { $0.state == .running }
+                    let idleSessions = viewModel.sessions.filter { $0.state == .idle }
 
-                if viewModel.filterState == nil || viewModel.filterState == .waitingForUser {
-                    if !waitingSessions.isEmpty {
-                        let threshold = Double(AppSettings.shared.remindAfterMinutes * 60)
-                        let overdueCount = AppSettings.shared.remindEnabled ? waitingSessions.filter { Date().timeIntervalSince($0.stateSince) >= threshold }.count : 0
-                        let overdueText: Text? = overdueCount > 0 ? Text("· \(overdueCount) 个已超时").foregroundColor(.red) : nil
-                        sectionHeader(title: "等你回复", dotColor: .orange, trailing: overdueText)
-                        ForEach(waitingSessions) { session in
-                            SessionRow(session: session, viewModel: viewModel)
-                        }
-                    }
-                }
-
-                if viewModel.filterState == nil || viewModel.filterState == .completed {
-                    if !doneSessions.isEmpty {
-                        sectionHeader(title: "已完成", dotColor: .green)
-                        ForEach(doneSessions) { session in
-                            SessionRow(session: session, viewModel: viewModel)
-                        }
-                    }
-                }
-
-                if viewModel.filterState == nil || viewModel.filterState == .running {
-                    if !runningSessions.isEmpty {
-                        sectionHeader(title: "运行中", dotColor: .blue)
-                        ForEach(runningSessions) { session in
-                            SessionRow(session: session, viewModel: viewModel)
-                        }
-                    }
-                }
-
-                if viewModel.filterState == nil || viewModel.filterState == .idle {
-                    if !idleSessions.isEmpty {
-                        let isExpanded = viewModel.isIdleExpanded || viewModel.filterState == .idle
-                        Button(action: {
-                            withAnimation(.snappy(duration: 0.2)) {
-                                viewModel.isIdleExpanded.toggle()
-                            }
-                        }) {
-                            HStack(spacing: 8) {
-                                Circle()
-                                    .fill(Color.gray)
-                                    .frame(width: 6, height: 6)
-                                Text("空闲 · \(idleSessions.count) 个会话")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundColor(.secondary)
-                                Spacer()
-                                Image(systemName: "chevron.right")
-                                    .font(.system(size: 10, weight: .semibold))
-                                    .foregroundColor(.secondary)
-                                    .rotationEffect(isExpanded ? .degrees(90) : .zero)
-                            }
-                            .padding(8)
-                            .background(isIdleHovered ? AnyShapeStyle(.fill.quaternary) : AnyShapeStyle(Color.clear))
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        }
-                        .buttonStyle(.plain)
-                        .onHover { isIdleHovered = $0 }
-
-                        if isExpanded {
-                            ForEach(idleSessions) { session in
+                    if viewModel.filterState == nil || viewModel.filterState == .waitingForUser {
+                        if !waitingSessions.isEmpty {
+                            let threshold = Double(AppSettings.shared.remindAfterMinutes * 60)
+                            let overdueCount = AppSettings.shared.remindEnabled ? waitingSessions.filter { Date().timeIntervalSince($0.stateSince) >= threshold }.count : 0
+                            let overdueText: Text? = overdueCount > 0 ? Text("· \(overdueCount) 个已超时").foregroundColor(.red) : nil
+                            sectionHeader(title: "等你回复", dotColor: .orange, trailing: overdueText)
+                            ForEach(waitingSessions) { session in
                                 SessionRow(session: session, viewModel: viewModel)
+                                    .id(session.id)
                             }
-                            .transition(.asymmetric(insertion: .opacity, removal: .identity))
                         }
                     }
-                }
 
-                if viewModel.sessions.isEmpty {
-                    ContentUnavailableView {
-                        Label("暂无活跃会话", systemImage: "rectangle.stack")
-                    } description: {
-                        Text("各 agent 启动后将在此处自动汇总")
+                    if viewModel.filterState == nil || viewModel.filterState == .completed {
+                        if !doneSessions.isEmpty {
+                            sectionHeader(title: "已完成", dotColor: .green)
+                            ForEach(doneSessions) { session in
+                                SessionRow(session: session, viewModel: viewModel)
+                                    .id(session.id)
+                            }
+                        }
+                    }
+
+                    if viewModel.filterState == nil || viewModel.filterState == .running {
+                        if !runningSessions.isEmpty {
+                            sectionHeader(title: "运行中", dotColor: .blue)
+                            ForEach(runningSessions) { session in
+                                SessionRow(session: session, viewModel: viewModel)
+                                    .id(session.id)
+                            }
+                        }
+                    }
+
+                    if viewModel.filterState == nil || viewModel.filterState == .idle {
+                        if !idleSessions.isEmpty {
+                            let isExpanded = viewModel.isIdleExpanded || viewModel.filterState == .idle
+                            Button(action: {
+                                withAnimation(.snappy(duration: 0.2)) {
+                                    viewModel.isIdleExpanded.toggle()
+                                }
+                            }) {
+                                HStack(spacing: 8) {
+                                    Circle()
+                                        .fill(Color.gray)
+                                        .frame(width: 6, height: 6)
+                                    Text("空闲 · \(idleSessions.count) 个会话")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundColor(.secondary)
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 10, weight: .semibold))
+                                        .foregroundColor(.secondary)
+                                        .rotationEffect(isExpanded ? .degrees(90) : .zero)
+                                }
+                                .padding(8)
+                                .background(isIdleHovered ? AnyShapeStyle(.fill.quaternary) : AnyShapeStyle(Color.clear))
+                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
+                            .onHover { isIdleHovered = $0 }
+
+                            if isExpanded {
+                                ForEach(idleSessions) { session in
+                                    SessionRow(session: session, viewModel: viewModel)
+                                        .id(session.id)
+                                }
+                                .transition(.asymmetric(insertion: .opacity, removal: .identity))
+                            }
+                        }
+                    }
+
+                    if viewModel.sessions.isEmpty {
+                        ContentUnavailableView {
+                            Label("暂无活跃会话", systemImage: "rectangle.stack")
+                        } description: {
+                            Text("各 agent 启动后将在此处自动汇总")
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 24)
+                    }
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 1)
+                .background(ScrollViewConfigurator())
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { newHeight in
+                    contentHeight = newHeight
+                }
+            }
+            .scrollDisabled(!needsScrolling)
+            .scrollIndicators(.hidden)
+            .scrollPosition($scrollPosition)
+            .onScrollGeometryChange(for: ScrollMetrics.self) { geo in
+                let insets = geo.contentInsets.top + geo.contentInsets.bottom
+                let visible = geo.containerSize.height - insets
+                return ScrollMetrics(
+                    offset: geo.contentOffset.y + geo.contentInsets.top,
+                    maxOffset: max(0, geo.contentSize.height - visible),
+                    visibleHeight: visible,
+                    visibleFraction: geo.contentSize.height > 0 ? min(1, visible / geo.contentSize.height) : 1
+                )
+            } action: { old, new in
+                scrollMetrics = new
+                if abs(new.offset - old.offset) > 0.5 {
+                    triggerScrollIndicator()
+                }
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
+            // spacing: 0 so the inset equals the measured button height that the frame below adds
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if showBottomButton {
+                    Button(action: {
+                        withAnimation(.smooth) {
+                            viewModel.markAllAsRead()
+                        }
+                    }) {
+                        Label("全部标为已读", systemImage: "checkmark")
+                    }
+                    .buttonStyle(.glass)
+                    .controlSize(.large)
+                    .glassEffectTransition(.materialize)
+                    .padding(.top, 4)
+                    .padding(.bottom, 2)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { newHeight in
+                        buttonHeight = newHeight
                     }
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 24)
                 }
             }
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, 1)
-            .background(ScrollViewConfigurator())
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { newHeight in
-                contentHeight = newHeight
+            .frame(height: contentHeight > 0 ? min(totalContentHeight, maxListHeight) : nil)
+            .frame(maxHeight: maxListHeight)
+            .clipped()
+            // After clipped() so the thumb can sit in MenuView's side padding instead of over the rows
+            .overlay(alignment: .trailing) {
+                CustomScrollIndicator(
+                    metrics: scrollMetrics,
+                    bottomInset: showBottomButton ? buttonHeight : 0,
+                    isScrolling: isScrolling,
+                    onScrollTo: { targetOffset in
+                        triggerScrollIndicator()
+                        scrollPosition.scrollTo(y: targetOffset)
+                    }
+                )
+                .offset(x: CustomScrollIndicator.gutterWidth)
             }
-        }
-        .scrollDisabled(!needsScrolling)
-        .scrollIndicators(.hidden)
-        .scrollPosition($scrollPosition)
-        .onScrollGeometryChange(for: ScrollMetrics.self) { geo in
-            let insets = geo.contentInsets.top + geo.contentInsets.bottom
-            let visible = geo.containerSize.height - insets
-            return ScrollMetrics(
-                offset: geo.contentOffset.y + geo.contentInsets.top,
-                maxOffset: max(0, geo.contentSize.height - visible),
-                visibleHeight: visible,
-                visibleFraction: geo.contentSize.height > 0 ? min(1, visible / geo.contentSize.height) : 1
-            )
-        } action: { old, new in
-            scrollMetrics = new
-            if abs(new.offset - old.offset) > 0.5 {
+            .onChange(of: viewModel.isIdleExpanded) { _, _ in
                 triggerScrollIndicator()
             }
-        }
-        .scrollBounceBehavior(.basedOnSize)
-        .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
-        // spacing: 0 so the inset equals the measured button height that the frame below adds
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            if showBottomButton {
-                Button(action: {
-                    withAnimation(.smooth) {
-                        viewModel.markAllAsRead()
-                    }
-                }) {
-                    Label("全部标为已读", systemImage: "checkmark")
-                }
-                .buttonStyle(.glass)
-                .controlSize(.large)
-                .glassEffectTransition(.materialize)
-                .padding(.top, 4)
-                .padding(.bottom, 2)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { newHeight in
-                    buttonHeight = newHeight
-                }
-                .frame(maxWidth: .infinity)
+            .onChange(of: viewModel.filterState) { _, _ in
+                triggerScrollIndicator()
             }
-        }
-        .frame(height: contentHeight > 0 ? min(totalContentHeight, maxListHeight) : nil)
-        .frame(maxHeight: maxListHeight)
-        .clipped()
-        // After clipped() so the thumb can sit in MenuView's side padding instead of over the rows
-        .overlay(alignment: .trailing) {
-            CustomScrollIndicator(
-                metrics: scrollMetrics,
-                bottomInset: showBottomButton ? buttonHeight : 0,
-                isScrolling: isScrolling,
-                onScrollTo: { targetOffset in
-                    triggerScrollIndicator()
-                    scrollPosition.scrollTo(y: targetOffset)
+            .onChange(of: viewModel.keyboardSelectionID) { _, newID in
+                if let id = newID {
+                    proxy.scrollTo(id, anchor: nil)
                 }
-            )
-            .offset(x: CustomScrollIndicator.gutterWidth)
-        }
-        .onChange(of: viewModel.isIdleExpanded) { _, _ in
-            triggerScrollIndicator()
-        }
-        .onChange(of: viewModel.filterState) { _, _ in
-            triggerScrollIndicator()
+            }
         }
     }
 

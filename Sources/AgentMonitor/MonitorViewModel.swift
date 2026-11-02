@@ -16,6 +16,37 @@ public final class MonitorViewModel: ObservableObject {
 
     @Published public var isIdleExpanded: Bool = false
     @Published public var filterState: SessionState? = nil
+    @Published public var keyboardSelectionID: String? = nil
+
+    /// Returns the sessions currently visible in the panel in visual display order.
+    public var visibleSessions: [AgentSession] {
+        var result: [AgentSession] = []
+        let waiting = sessions.filter { $0.state == .waitingForUser }
+        let done = sessions.filter { $0.state == .completed }
+        let running = sessions.filter { $0.state == .running }
+        let idle = sessions.filter { $0.state == .idle }
+
+        if filterState == nil || filterState == .waitingForUser {
+            result.append(contentsOf: waiting)
+        }
+        if filterState == nil || filterState == .completed {
+            result.append(contentsOf: done)
+        }
+        if filterState == nil || filterState == .running {
+            result.append(contentsOf: running)
+        }
+        if filterState == nil || filterState == .idle {
+            if isIdleExpanded || filterState == .idle {
+                result.append(contentsOf: idle)
+            }
+        }
+        return result
+    }
+
+    /// Returns the session IDs currently visible in the panel.
+    public var visibleSessionIDs: [String] {
+        visibleSessions.map(\.id)
+    }
 
     /// Returns true if the active filter has 0 matching sessions and should be cleared.
     public static func shouldClearFilter(currentFilter: SessionState?, sessions: [AgentSession]) -> Bool {
@@ -157,6 +188,15 @@ public final class MonitorViewModel: ObservableObject {
 
         sessionStore.maxAgeSeconds = TimeInterval(AppSettings.shared.activityWindowHours * 3600)
         sessionStore.disabledKinds = AppSettings.shared.disabledAgents
+        sessionStore.showUsage = AppSettings.shared.showUsage
+
+        AppSettings.shared.$showUsage
+            .dropFirst()
+            .sink { [weak self] show in
+                self?.sessionStore.showUsage = show
+                self?.sessionStore.refresh()
+            }
+            .store(in: &cancellables)
 
         AppSettings.shared.$activityWindowHours
             .dropFirst()
@@ -226,6 +266,10 @@ public final class MonitorViewModel: ObservableObject {
         updatePauseState()
         startReminderTimer()
         sessionStore.start()
+
+        HotkeyCenter.shared.setup { [weak self] in
+            self?.sessions ?? []
+        }
     }
 
     private func startReminderTimer() {
@@ -276,7 +320,17 @@ public final class MonitorViewModel: ObservableObject {
                 lastActivity: now.addingTimeInterval(-240),
                 detail: "git push --force origin main",
                 detailIsCommand: true,
-                waitingLabel: "等待授权"
+                waitingLabel: "等待授权",
+                usage: SessionUsage(
+                    model: "gpt-6-astra",
+                    inputTokens: 663_900,
+                    cachedInputTokens: 624_500,
+                    outputTokens: 4_600,
+                    reasoningTokens: 69,
+                    contextTokens: 98_200,
+                    contextWindow: 258_400,
+                    updatedAt: now.addingTimeInterval(-3)
+                )
             ),
             AgentSession(
                 id: "cc:mock-2",
@@ -288,7 +342,18 @@ public final class MonitorViewModel: ObservableObject {
                 lastActivity: now.addingTimeInterval(-60),
                 detail: "第一版做成哪种形态？",
                 detailIsCommand: false,
-                waitingLabel: "在问你"
+                waitingLabel: "在问你",
+                usage: SessionUsage(
+                    model: "claude-opus-5-5",
+                    inputTokens: 26,
+                    cachedInputTokens: 5_650_000,
+                    cacheWriteTokens: 62_800,
+                    outputTokens: 5_100,
+                    requestCount: 13,
+                    contextTokens: 459_554,
+                    contextWindow: nil,
+                    updatedAt: now
+                )
             ),
             AgentSession(
                 id: "ag:mock-3",
@@ -299,7 +364,12 @@ public final class MonitorViewModel: ObservableObject {
                 stateSince: now.addingTimeInterval(-720),
                 lastActivity: now.addingTimeInterval(-720),
                 detail: "已生成 3 个文件，测试全部通过",
-                completedDuration: 372
+                completedDuration: 372,
+                usage: SessionUsage(
+                    model: nil,
+                    steps: 86,
+                    updatedAt: now.addingTimeInterval(-720)
+                )
             ),
             AgentSession(
                 id: "ds:mock-4",
@@ -319,7 +389,15 @@ public final class MonitorViewModel: ObservableObject {
                 state: .running,
                 stateSince: now.addingTimeInterval(-48),
                 lastActivity: now.addingTimeInterval(-48),
-                detail: "正在思考…"
+                detail: "正在思考…",
+                usage: SessionUsage(
+                    model: "claude-opus-5-5",
+                    inputTokens: 100_000,
+                    cachedInputTokens: 800_000,
+                    outputTokens: 120_000,
+                    contextTokens: 1_020_000,
+                    updatedAt: now.addingTimeInterval(-48)
+                )
             ),
             AgentSession(
                 id: "cx:mock-6",
@@ -457,13 +535,27 @@ public final class MonitorViewModel: ObservableObject {
 
     public func markAsRead(id: String) {
         sessionStore.markAsRead(id: id)
-        rawSessions = sessionStore.currentSessions
+        let storeSessions = sessionStore.currentSessions
+        if !storeSessions.isEmpty {
+            rawSessions = storeSessions
+        } else if let idx = rawSessions.firstIndex(where: { $0.id == id }) {
+            rawSessions[idx].state = .idle
+        }
         applyMuteFilters()
     }
 
     public func markAllAsRead() {
         sessionStore.markAllAsRead()
-        rawSessions = sessionStore.currentSessions
+        let storeSessions = sessionStore.currentSessions
+        if !storeSessions.isEmpty {
+            rawSessions = storeSessions
+        } else {
+            for idx in rawSessions.indices {
+                if rawSessions[idx].state == .completed {
+                    rawSessions[idx].state = .idle
+                }
+            }
+        }
         applyMuteFilters()
     }
 
@@ -506,6 +598,188 @@ public final class MonitorViewModel: ObservableObject {
 
     public func onPanelDisappear() {
         sessionStore.isPanelVisible = false
+        keyboardSelectionID = nil
+    }
+
+    // MARK: - Keyboard Navigation
+
+    public func selectNextSession() {
+        let ids = visibleSessionIDs
+        guard !ids.isEmpty else { return }
+        guard let current = keyboardSelectionID, let idx = ids.firstIndex(of: current) else {
+            keyboardSelectionID = ids.first
+            return
+        }
+        if idx + 1 < ids.count {
+            keyboardSelectionID = ids[idx + 1]
+        }
+    }
+
+    public func selectPreviousSession() {
+        let ids = visibleSessionIDs
+        guard !ids.isEmpty else { return }
+        guard let current = keyboardSelectionID, let idx = ids.firstIndex(of: current) else {
+            keyboardSelectionID = ids.last
+            return
+        }
+        if idx > 0 {
+            keyboardSelectionID = ids[idx - 1]
+        }
+    }
+
+    public func activateCurrentSelection() {
+        guard let id = keyboardSelectionID,
+              let session = sessions.first(where: { $0.id == id }) else { return }
+        if session.state == .completed {
+            withAnimation(.smooth) {
+                markAsRead(id: session.id)
+            }
+        }
+        SessionJumper.shared.jump(to: session)
+    }
+
+    public func markCurrentSelectionAsReadAndAdvance() {
+        guard let id = keyboardSelectionID,
+              let session = sessions.first(where: { $0.id == id }),
+              session.state == .completed else { return }
+
+        let currentIDs = visibleSessionIDs
+        let currentIdx = currentIDs.firstIndex(of: id)
+
+        withAnimation(.smooth) {
+            markAsRead(id: id)
+        }
+
+        let newIDs = visibleSessionIDs
+        guard !newIDs.isEmpty else {
+            keyboardSelectionID = nil
+            return
+        }
+
+        if let idx = currentIdx {
+            if idx < newIDs.count {
+                keyboardSelectionID = newIDs[idx]
+            } else {
+                keyboardSelectionID = newIDs.last
+            }
+        } else {
+            keyboardSelectionID = newIDs.first
+        }
+    }
+
+    public func handleDigitFilter(_ digit: Int) {
+        let target: SessionState
+        switch digit {
+        case 1: target = .waitingForUser
+        case 2: target = .completed
+        case 3: target = .running
+        case 4: target = .idle
+        default: return
+        }
+
+        let count = sessions.filter { $0.state == target }.count
+        guard count > 0 else { return }
+
+        withAnimation(.snappy(duration: 0.2)) {
+            if filterState == target {
+                filterState = nil
+            } else {
+                filterState = target
+            }
+            keyboardSelectionID = nil
+        }
+    }
+
+    public func handleEscape() -> Bool {
+        if filterState != nil {
+            withAnimation(.snappy(duration: 0.2)) {
+                filterState = nil
+                keyboardSelectionID = nil
+            }
+            return true
+        }
+        keyboardSelectionID = nil
+        return false
+    }
+
+    public func handleKeyEvent(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
+
+        // ⌘, : 打开设置
+        if flags == .command && (event.keyCode == 43 || event.charactersIgnoringModifiers == ",") {
+            SettingsWindowManager.shared.openSettings()
+            return true
+        }
+
+        // ⌘⌫ : 全部标为已读
+        if flags == .command && (event.keyCode == 51 || event.keyCode == 117) {
+            withAnimation(.smooth) {
+                markAllAsRead()
+            }
+            return true
+        }
+
+        // ⌫ 或 ⌦ (无修饰键) : 标为已读并移到下一项
+        if flags.isEmpty && (event.keyCode == 51 || event.keyCode == 117) {
+            markCurrentSelectionAsReadAndAdvance()
+            return true
+        }
+
+        // ↓ (DownArrow, keyCode 125)
+        if event.keyCode == 125 {
+            selectNextSession()
+            return true
+        }
+
+        // ↑ (UpArrow, keyCode 126)
+        if event.keyCode == 126 {
+            selectPreviousSession()
+            return true
+        }
+
+        // ↩ (Return, keyCode 36)
+        if event.keyCode == 36 {
+            activateCurrentSelection()
+            return true
+        }
+
+        // esc (Escape, keyCode 53)
+        if event.keyCode == 53 {
+            let handled = handleEscape()
+            if !handled {
+                if let keyWindow = NSApp.keyWindow {
+                    keyWindow.close()
+                } else {
+                    MenuBarExtraToggler.toggle()
+                }
+            }
+            return true
+        }
+
+        // 1-4 数字键
+        if flags.isEmpty {
+            switch Int(event.keyCode) {
+            case 18, 83: // '1' or Keypad 1
+                handleDigitFilter(1)
+                return true
+            case 19, 84: // '2' or Keypad 2
+                handleDigitFilter(2)
+                return true
+            case 20, 85: // '3' or Keypad 3
+                handleDigitFilter(3)
+                return true
+            case 21, 86: // '4' or Keypad 4
+                handleDigitFilter(4)
+                return true
+            default:
+                if let chars = event.charactersIgnoringModifiers, let first = chars.first, let digit = Int(String(first)), digit >= 1 && digit <= 4 {
+                    handleDigitFilter(digit)
+                    return true
+                }
+            }
+        }
+
+        return false
     }
 
     public func setLaunchAtLogin(_ enable: Bool) {
