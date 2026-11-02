@@ -38,8 +38,8 @@ struct PanelHeader: View {
 
                     // Settings Menu
                     Menu {
-                        Button("设置…") {
-                            SettingsWindowManager.shared.openSettings()
+                        SettingsLink {
+                            Text("设置…")
                         }
                         .keyboardShortcut(",", modifiers: .command)
                         Toggle("开机启动", isOn: Binding(

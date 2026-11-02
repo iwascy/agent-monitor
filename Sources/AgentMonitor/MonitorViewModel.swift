@@ -17,6 +17,7 @@ public final class MonitorViewModel: ObservableObject {
     @Published public var isIdleExpanded: Bool = false
     @Published public var filterState: SessionState? = nil
     @Published public var keyboardSelectionID: String? = nil
+    @Published public var hasOverdue: Bool = false
 
     /// Returns the sessions currently visible in the panel in visual display order.
     public var visibleSessions: [AgentSession] {
@@ -81,13 +82,14 @@ public final class MonitorViewModel: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
 
     public var highestState: SessionState? {
-        let active = sessions.filter { s in
+        let active = sessions
+        let waitingActive = active.filter { s in
             if let rule = MuteRule.matchingRule(for: s.cwd, rules: AppSettings.shared.muteRules), rule.scope == .all {
                 return false
             }
             return true
         }
-        if active.contains(where: { $0.state == .waitingForUser }) {
+        if waitingActive.contains(where: { $0.state == .waitingForUser }) {
             return .waitingForUser
         }
         if active.contains(where: { $0.state == .completed }) {
@@ -109,23 +111,32 @@ public final class MonitorViewModel: ObservableObject {
         }.count
     }
 
-    public var hasOverdueWaitingSessions: Bool {
+    public func recalculateOverdue(now: Date = Date()) {
         let settings = AppSettings.shared
-        guard settings.remindEnabled else { return false }
+        guard settings.remindEnabled else {
+            if hasOverdue { hasOverdue = false }
+            return
+        }
         let threshold = Double(settings.remindAfterMinutes * 60)
-        let now = Date()
-        return sessions.contains { session in
+        let isOverdue = sessions.contains { session in
             guard session.state == .waitingForUser else { return false }
             if let rule = MuteRule.matchingRule(for: session.cwd, rules: settings.muteRules), rule.scope == .all {
                 return false
             }
             return now.timeIntervalSince(session.stateSince) >= threshold
         }
+        if hasOverdue != isOverdue {
+            hasOverdue = isOverdue
+        }
+    }
+
+    public var hasOverdueWaitingSessions: Bool {
+        hasOverdue
     }
 
     public var effectiveMenuState: (highestState: SessionState?, waitingCount: Int, isPaused: Bool, isOverdue: Bool) {
         let settings = AppSettings.shared
-        let overdue = settings.overdueBadgeRed && hasOverdueWaitingSessions
+        let overdue = settings.overdueBadgeRed && hasOverdue
         let count = settings.showWaitingCountInMenuBar ? waitingCount : 0
 
         if let env = ProcessInfo.processInfo.environment["AGENT_MONITOR_MENU_STATE"]?.lowercased() {
@@ -149,9 +160,12 @@ public final class MonitorViewModel: ObservableObject {
         return (highestState: highestState, waitingCount: count, isPaused: isNotificationsPaused, isOverdue: overdue)
     }
 
+    public static weak var shared: MonitorViewModel?
+
     public init(sessionStore: SessionStore) {
         self.sessionStore = sessionStore
         self.isLaunchAtLogin = SMAppService.mainApp.status == .enabled
+        Self.shared = self
 
         let env = ProcessInfo.processInfo.environment
         if let filter = env["AGENT_MONITOR_FILTER"]?.lowercased() {
@@ -194,7 +208,7 @@ public final class MonitorViewModel: ObservableObject {
             .dropFirst()
             .sink { [weak self] show in
                 self?.sessionStore.showUsage = show
-                self?.sessionStore.refresh()
+                self?.sessionStore.refreshAsync()
             }
             .store(in: &cancellables)
 
@@ -202,7 +216,7 @@ public final class MonitorViewModel: ObservableObject {
             .dropFirst()
             .sink { [weak self] hours in
                 self?.sessionStore.maxAgeSeconds = TimeInterval(hours * 3600)
-                self?.sessionStore.refresh()
+                self?.sessionStore.refreshAsync()
             }
             .store(in: &cancellables)
 
@@ -210,14 +224,14 @@ public final class MonitorViewModel: ObservableObject {
             .dropFirst()
             .sink { [weak self] disabled in
                 self?.sessionStore.disabledKinds = disabled
-                self?.sessionStore.refresh()
+                self?.sessionStore.refreshAsync()
             }
             .store(in: &cancellables)
 
         AppSettings.shared.$muteRules
             .dropFirst()
-            .sink { [weak self] _ in
-                self?.applyMuteFilters()
+            .sink { [weak self] rules in
+                self?.applyMuteFilters(rules: rules)
                 self?.objectWillChange.send()
             }
             .store(in: &cancellables)
@@ -277,7 +291,9 @@ public final class MonitorViewModel: ObservableObject {
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + 30.0, repeating: 30.0)
         timer.setEventHandler { [weak self] in
-            self?.checkReminders()
+            guard let self = self else { return }
+            self.recalculateOverdue()
+            self.checkReminders()
         }
         timer.resume()
         self.reminderTimer = timer
@@ -285,25 +301,27 @@ public final class MonitorViewModel: ObservableObject {
 
     public func checkReminders(now: Date = Date()) {
         let settings = AppSettings.shared
-        guard !isNotificationsPaused,
-              settings.remindEnabled,
-              settings.notifyWaiting else {
-            return
-        }
-        if settings.silenceWhilePanelOpen && sessionStore.isPanelVisible {
-            return
-        }
+        let snapshot = NotificationPolicy.SettingsSnapshot(
+            notifyWaiting: settings.notifyWaiting,
+            notifyCompleted: settings.notifyCompleted,
+            minRunSecondsForCompletion: settings.minRunSecondsForCompletion,
+            silenceWhilePanelOpen: settings.silenceWhilePanelOpen,
+            remindEnabled: settings.remindEnabled
+        )
 
-        let eligible = sessions.filter { s in
-            if let rule = MuteRule.matchingRule(for: s.cwd, rules: settings.muteRules), rule.scope == .all {
-                return false
-            }
-            return true
-        }
+        let waitingSessions = rawSessions.filter { $0.state == .waitingForUser }
+        let dueList = reminderScheduler.evaluate(sessions: waitingSessions, now: now)
 
-        let dueList = reminderScheduler.evaluate(sessions: eligible, now: now)
         for (session, index) in dueList {
-            notifier.sendReminder(for: session, index: index)
+            if NotificationPolicy.shouldSendReminder(
+                session: session,
+                settings: snapshot,
+                muteRules: settings.muteRules,
+                isPanelVisible: sessionStore.isPanelVisible,
+                isNotificationsPaused: isNotificationsPaused
+            ) {
+                notifier.sendReminder(for: session, index: index)
+            }
         }
     }
 
@@ -520,8 +538,7 @@ public final class MonitorViewModel: ObservableObject {
         self.checkReminders()
     }
 
-    private func applyMuteFilters() {
-        let rules = AppSettings.shared.muteRules
+    private func applyMuteFilters(rules: [MuteRule] = AppSettings.shared.muteRules) {
         let filtered = rawSessions.filter { s in
             if let rule = MuteRule.matchingRule(for: s.cwd, rules: rules), rule.hideInPanel {
                 return false
@@ -531,6 +548,7 @@ public final class MonitorViewModel: ObservableObject {
         if self.sessions != filtered {
             self.sessions = filtered
         }
+        recalculateOverdue()
     }
 
     public func markAsRead(id: String) {

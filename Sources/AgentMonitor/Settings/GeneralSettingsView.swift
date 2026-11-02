@@ -10,19 +10,24 @@ struct GeneralSettingsView: View {
         Form {
             Section {
                 Toggle("开机时启动", isOn: Binding(
-                    get: { launchAtLogin },
+                    get: {
+                        MonitorViewModel.shared?.isLaunchAtLogin ?? (SMAppService.mainApp.status == .enabled)
+                    },
                     set: { enable in
-                        do {
-                            if enable {
-                                try SMAppService.mainApp.register()
-                            } else {
-                                try SMAppService.mainApp.unregister()
+                        if let vm = MonitorViewModel.shared {
+                            vm.setLaunchAtLogin(enable)
+                        } else {
+                            do {
+                                if enable {
+                                    try SMAppService.mainApp.register()
+                                } else {
+                                    try SMAppService.mainApp.unregister()
+                                }
+                            } catch {
+                                NSLog("Failed to update launch at login: %@", error.localizedDescription)
                             }
-                            launchAtLogin = (SMAppService.mainApp.status == .enabled)
-                        } catch {
-                            NSLog("Failed to update launch at login: %@", error.localizedDescription)
-                            launchAtLogin = (SMAppService.mainApp.status == .enabled)
                         }
+                        launchAtLogin = (SMAppService.mainApp.status == .enabled)
                     }
                 ))
 

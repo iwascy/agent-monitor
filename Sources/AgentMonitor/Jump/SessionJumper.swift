@@ -26,7 +26,7 @@ public final class SessionJumper {
         "com.mitchellh.ghostty",
         "net.kovidgoyal.kitty",
         "com.github.wez.wezterm",
-        "io.alacritty",
+        "org.alacritty",
         "com.apple.Terminal"
     ]
 
@@ -38,15 +38,43 @@ public final class SessionJumper {
                 return id
             }
         }
-        return terminalBundleIds.first ?? "com.apple.Terminal"
+        for id in terminalBundleIds {
+            if NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) != nil {
+                return id
+            }
+        }
+        return "com.apple.Terminal"
+    }
+
+    public static func codexDesktopBundleId() -> String {
+        let candidates = ["com.openai.codex", "com.openai.chat"]
+        for id in candidates {
+            if !NSRunningApplication.runningApplications(withBundleIdentifier: id).isEmpty {
+                return id
+            }
+        }
+        for id in candidates {
+            if NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) != nil {
+                return id
+            }
+        }
+        if FileManager.default.fileExists(atPath: "/Applications/ChatGPT.app"),
+           let bundle = Bundle(path: "/Applications/ChatGPT.app"),
+           let id = bundle.bundleIdentifier {
+            return id
+        }
+        return "com.openai.codex"
     }
 
     public func target(for session: AgentSession) -> JumpTarget {
         if let pid = session.pid, let host = HostResolver.shared.resolve(pid: pid) {
             let bundleId = host.app.bundleIdentifier ?? ""
             if Self.editorBundleIds.contains(bundleId) {
-                let folder = session.cwd.map { URL(fileURLWithPath: $0) } ?? FileManager.default.homeDirectoryForCurrentUser
-                return .editor(bundleId: bundleId, folder: folder)
+                if let cwd = session.cwd, !cwd.isEmpty {
+                    return .editor(bundleId: bundleId, folder: URL(fileURLWithPath: cwd))
+                } else {
+                    return .app(bundleId: bundleId)
+                }
             } else {
                 return .terminal(host: host, windowHint: session.title)
             }
@@ -61,7 +89,7 @@ public final class SessionJumper {
             }
         case .codex:
             if let originator = session.originator, originator.contains("Desktop") {
-                return .app(bundleId: "com.openai.chat")
+                return .app(bundleId: Self.codexDesktopBundleId())
             } else {
                 return .app(bundleId: Self.firstRunningTerminalBundleId())
             }

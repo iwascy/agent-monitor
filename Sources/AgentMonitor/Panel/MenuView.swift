@@ -5,7 +5,9 @@ import AgentMonitorCore
 public struct MenuView: View {
     @ObservedObject var viewModel: MonitorViewModel
     @Environment(\.colorScheme) var colorScheme
+    @Environment(\.openSettings) private var openSettings
     @LocalState private var localMonitor: Any? = nil
+    @LocalState private var panelWindow: NSWindow? = nil
 
     public init(viewModel: MonitorViewModel) {
         self.viewModel = viewModel
@@ -43,12 +45,21 @@ public struct MenuView: View {
         .frame(width: 384)
         .fixedSize(horizontal: false, vertical: true)
         .preferredColorScheme(forcedColorScheme)
+        .background(WindowAccessor { win in
+            self.panelWindow = win
+        })
         .focusable()
         .focusEffectDisabled()
         .onAppear {
+            SettingsWindowManager.shared.openSettingsAction = {
+                openSettings()
+            }
             viewModel.onPanelAppear()
             if localMonitor == nil {
                 localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                    if let window = panelWindow, event.window !== window {
+                        return event
+                    }
                     if viewModel.handleKeyEvent(event) {
                         return nil
                     }
@@ -73,6 +84,24 @@ public struct MenuView: View {
             Text(label)
                 .font(.system(size: 10))
                 .foregroundColor(Color.secondary.opacity(0.8))
+        }
+    }
+}
+
+private struct WindowAccessor: NSViewRepresentable {
+    let onResolve: (NSWindow?) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async {
+            onResolve(view.window)
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async {
+            onResolve(nsView.window)
         }
     }
 }

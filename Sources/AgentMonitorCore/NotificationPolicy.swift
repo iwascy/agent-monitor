@@ -6,18 +6,43 @@ public struct NotificationPolicy {
         public var notifyCompleted: Bool
         public var minRunSecondsForCompletion: Int
         public var silenceWhilePanelOpen: Bool
+        public var remindEnabled: Bool
 
         public init(
             notifyWaiting: Bool = true,
             notifyCompleted: Bool = true,
             minRunSecondsForCompletion: Int = 10,
-            silenceWhilePanelOpen: Bool = true
+            silenceWhilePanelOpen: Bool = true,
+            remindEnabled: Bool = true
         ) {
             self.notifyWaiting = notifyWaiting
             self.notifyCompleted = notifyCompleted
             self.minRunSecondsForCompletion = minRunSecondsForCompletion
             self.silenceWhilePanelOpen = silenceWhilePanelOpen
+            self.remindEnabled = remindEnabled
         }
+    }
+
+    public static func shouldSendReminder(
+        session: AgentSession,
+        settings: SettingsSnapshot,
+        muteRules: [MuteRule] = [],
+        isPanelVisible: Bool = false,
+        isNotificationsPaused: Bool = false
+    ) -> Bool {
+        if isNotificationsPaused {
+            return false
+        }
+        if !settings.remindEnabled || !settings.notifyWaiting {
+            return false
+        }
+        if isPanelVisible && settings.silenceWhilePanelOpen {
+            return false
+        }
+        if let rule = MuteRule.matchingRule(for: session.cwd, rules: muteRules), rule.scope == .all {
+            return false
+        }
+        return true
     }
 
     public static func shouldNotify(

@@ -9,6 +9,8 @@ public enum SessionTransition: Sendable, Equatable {
 public final class SessionStore: @unchecked Sendable {
     public let adapters: [AgentAdapter]
 
+    private var suppressAddedOnNextRefresh: Bool = false
+
     private var _maxAgeSeconds: TimeInterval
     public var maxAgeSeconds: TimeInterval {
         get {
@@ -18,7 +20,10 @@ public final class SessionStore: @unchecked Sendable {
         }
         set {
             lock.lock()
-            _maxAgeSeconds = newValue
+            if _maxAgeSeconds != newValue {
+                _maxAgeSeconds = newValue
+                suppressAddedOnNextRefresh = true
+            }
             lock.unlock()
         }
     }
@@ -32,7 +37,10 @@ public final class SessionStore: @unchecked Sendable {
         }
         set {
             lock.lock()
-            _disabledKinds = newValue
+            if _disabledKinds != newValue {
+                _disabledKinds = newValue
+                suppressAddedOnNextRefresh = true
+            }
             lock.unlock()
         }
     }
@@ -240,10 +248,19 @@ public final class SessionStore: @unchecked Sendable {
         onSessionsUpdated?(updated)
     }
 
+    public func refreshAsync() {
+        workQueue.async { [weak self] in
+            self?.refresh()
+        }
+    }
+
     @discardableResult
     public func refresh() -> [SessionTransition] {
         lock.lock()
         defer { lock.unlock() }
+
+        let suppressAdded = suppressAddedOnNextRefresh
+        suppressAddedOnNextRefresh = false
 
         var scannedSessions: [String: AgentSession] = [:]
         var successfulAdapters: Set<AgentKind> = []
@@ -267,6 +284,7 @@ public final class SessionStore: @unchecked Sendable {
 
         var transitions: [SessionTransition] = []
         var hasContentChanges = false
+        var removedFromDisabled = false
         let now = Date()
 
         // 0. Remove sessions from disabled adapters (without notifying)
@@ -274,6 +292,7 @@ public final class SessionStore: @unchecked Sendable {
             if currentDisabledKinds.contains(existing.kind) {
                 sessionCache.removeValue(forKey: id)
                 hasContentChanges = true
+                removedFromDisabled = true
             }
         }
 
@@ -363,18 +382,20 @@ public final class SessionStore: @unchecked Sendable {
         isInitialScan = false
         let isVisible = _isPanelVisible
 
-        if !transitions.isEmpty {
+        if !transitions.isEmpty || removedFromDisabled {
             let updated = currentSessions
             onSessionsUpdated?(updated)
             if !isInitial {
                 for t in transitions {
+                    if suppressAdded {
+                        if case .added = t {
+                            continue
+                        }
+                    }
                     onTransition?(t)
                 }
             }
-        } else if isInitial {
-            let updated = currentSessions
-            onSessionsUpdated?(updated)
-        } else if isVisible && hasContentChanges {
+        } else if isInitial || (isVisible && hasContentChanges) {
             let updated = currentSessions
             onSessionsUpdated?(updated)
         }

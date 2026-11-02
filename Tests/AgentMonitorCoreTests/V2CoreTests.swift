@@ -28,6 +28,12 @@ struct V2CoreTests {
 
         // Nil cwd
         #expect(MuteRule.matchingRule(for: nil, rules: rules) == nil)
+
+        // Root path "/" match (P2-2)
+        let rootRule = MuteRule(path: "/", scope: .all)
+        #expect(MuteRule.matchingRule(for: "/Users/test/proj", rules: [rootRule])?.id == rootRule.id)
+        #expect(MuteRule.matchingRule(for: "/any/path", rules: [rootRule])?.id == rootRule.id)
+        #expect(MuteRule.matchingRule(for: "/", rules: [rootRule])?.id == rootRule.id)
     }
 
     @Test("ClaudeCodeAdapter finds transcript when cwd has underscores and dots")

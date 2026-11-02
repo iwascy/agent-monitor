@@ -17,14 +17,10 @@ struct NotificationSettingsView: View {
     }
 
     private func playSound(_ name: String) {
-        if name == "none" {
+        if name == "none" || name == "default" {
             return
         }
-        if name == "default" {
-            NSSound(named: "Ping")?.play()
-        } else {
-            NSSound(named: name)?.play()
-        }
+        NSSound(named: name)?.play()
     }
 
     var body: some View {

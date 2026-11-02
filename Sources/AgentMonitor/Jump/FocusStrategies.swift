@@ -108,6 +108,32 @@ public final class FocusStrategies {
     }
 
     public func activateAppByBundleId(_ bundleId: String) {
+        if bundleId == "com.openai.codex" || bundleId == "com.openai.chat" {
+            let candidates = ["com.openai.codex", "com.openai.chat"]
+            for id in candidates {
+                if let running = NSRunningApplication.runningApplications(withBundleIdentifier: id).first {
+                    running.activate()
+                    return
+                }
+            }
+            for id in candidates {
+                if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) {
+                    let config = NSWorkspace.OpenConfiguration()
+                    config.activates = true
+                    NSWorkspace.shared.openApplication(at: appURL, configuration: config, completionHandler: nil)
+                    return
+                }
+            }
+            let fallbackPath = "/Applications/ChatGPT.app"
+            if FileManager.default.fileExists(atPath: fallbackPath) {
+                let appURL = URL(fileURLWithPath: fallbackPath)
+                let config = NSWorkspace.OpenConfiguration()
+                config.activates = true
+                NSWorkspace.shared.openApplication(at: appURL, configuration: config, completionHandler: nil)
+                return
+            }
+        }
+
         if let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleId).first {
             running.activate()
         } else if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) {

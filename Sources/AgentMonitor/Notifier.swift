@@ -149,7 +149,8 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             "sessionId": session.id,
             "kind": session.kind.rawValue,
             "cwd": session.cwd ?? "",
-            "entrypoint": session.entrypoint ?? ""
+            "entrypoint": session.entrypoint ?? "",
+            "originator": session.originator ?? ""
         ]
 
         if let cachedURL = IconManager.shared.cachedIconPNGURL(for: session.kind) {
@@ -200,7 +201,8 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             "sessionId": session.id,
             "kind": session.kind.rawValue,
             "cwd": session.cwd ?? "",
-            "entrypoint": session.entrypoint ?? ""
+            "entrypoint": session.entrypoint ?? "",
+            "originator": session.originator ?? ""
         ]
 
         if let cachedURL = IconManager.shared.cachedIconPNGURL(for: session.kind) {
@@ -254,11 +256,12 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         let sessionId = userInfo["sessionId"] as? String
         let kindRaw = userInfo["kind"] as? String
         let entrypoint = userInfo["entrypoint"] as? String
+        let originator = userInfo["originator"] as? String
         let cwd = userInfo["cwd"] as? String
 
         Task { @MainActor in
             if let act = action, act == "openIntegrationSettings" {
-                SettingsWindowManager.shared.openSettings()
+                SettingsWindowManager.shared.openSettings(tab: .integration)
                 return
             }
 
@@ -276,7 +279,8 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
                     title: "",
                     cwd: cwd,
                     state: .idle,
-                    entrypoint: entrypoint
+                    entrypoint: entrypoint,
+                    originator: originator
                 )
             }
             SessionJumper.shared.jump(to: sessionToJump)

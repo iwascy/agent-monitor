@@ -34,7 +34,7 @@ public enum AgentKind: String, Codable, Sendable, CaseIterable {
     public var bundleIdentifier: String {
         switch self {
         case .claudeCode: return "com.anthropic.claudefordesktop"
-        case .codex: return "com.openai.chat"
+        case .codex: return "com.openai.codex"
         case .dsh: return "com.deepseek.dsh"
         case .antigravity: return "com.google.antigravity"
         }
@@ -157,8 +157,12 @@ public struct MuteRule: Codable, Equatable, Identifiable, Sendable {
     public static func matchingRule(for cwd: String?, rules: [MuteRule]) -> MuteRule? {
         guard let cwd = cwd, !cwd.isEmpty else { return nil }
         // cwd == rule.path 或 cwd.hasPrefix(rule.path + "/") 才算命中；多条命中取 path 最长的；cwd 为 nil 时返回 nil
+        // 特判 rule.path 为 "/" 的情况，任何非空绝对路径均匹配
         let matches = rules.filter { rule in
-            cwd == rule.path || cwd.hasPrefix(rule.path + "/")
+            if rule.path == "/" {
+                return true
+            }
+            return cwd == rule.path || cwd.hasPrefix(rule.path + "/")
         }
         return matches.max { $0.path.count < $1.path.count }
     }
