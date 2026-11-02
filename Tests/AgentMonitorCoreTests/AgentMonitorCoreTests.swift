@@ -592,6 +592,36 @@ struct AgentMonitorCoreTests {
         #expect(session.detail == "先看一下目录结构。")
     }
 
+    @Test("DSH: approval request waits until its tool result or turn end")
+    func testDshApprovalLifecycle() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directory = root.appendingPathComponent("project/session")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent("session.v4.jsonl")
+        let prefix = [
+            #"{"type":"session","id":"approval"}"#,
+            #"{"type":"turn/start"}"#,
+            #"{"type":"tool/call","data":{"callId":"c1","name":"bash"}}"#,
+            #"{"type":"approval/asked","data":{"id":"a1","callId":"c1","toolName":"bash","reason":"需要扩大沙箱权限"}}"#
+        ]
+        let adapter = DshAdapter(sessionsDirectory: root, isLockHeld: { _ in true })
+        for (suffix, expected) in [
+            ("", SessionState.waitingForUser),
+            (#"{"type":"tool/result","data":{"callId":"other"}}"#, .waitingForUser),
+            (#"{"type":"tool/result","data":{"message":{"source":{"callId":"c1"}}}}"#, .running),
+            (#"{"type":"turn/end","data":{"reason":{"kind":"aborted"}}}"#, .idle)
+        ] {
+            try (prefix.joined(separator: "\n") + "\n" + suffix + "\n").write(to: file, atomically: true, encoding: .utf8)
+            let session = try #require(try adapter.scan().first)
+            #expect(session.state == expected)
+            if expected == .waitingForUser {
+                #expect(session.waitingLabel == "等待授权")
+                #expect(session.detail == "需要扩大沙箱权限")
+            }
+        }
+    }
+
     @Test("SessionStore: running -> idle with suppressCompletion stays idle")
     func testSessionStoreSuppressCompletion() throws {
         let mock = MockAdapter(kind: .codex)

@@ -209,6 +209,7 @@ public final class DshAdapter: AgentAdapter, @unchecked Sendable {
         var lastAssistantText: String?
         var pendingCallIds: Set<String> = []
         var questionCallIds: Set<String> = []
+        var approvalCallIds: Set<String> = []
 
         for line in lines {
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -235,12 +236,18 @@ public final class DshAdapter: AgentAdapter, @unchecked Sendable {
                     }
                 }
             } else if type == "turn/start" {
+                questionCallIds.removeAll()
+                approvalCallIds.removeAll()
+                summary.hasWaitingQuestion = false
+                summary.hasPendingApproval = false
                 summary.isTurnActive = true
                 summary.lastTurnAborted = false
                 summary.hasCompletedTurn = false
                 summary.detail = "正在思考…"
                 summary.detailIsCommand = false
             } else if type == "turn/end" {
+                questionCallIds.removeAll()
+                approvalCallIds.removeAll()
                 summary.isTurnActive = false
                 summary.hasWaitingQuestion = false
                 summary.hasPendingApproval = false
@@ -290,6 +297,14 @@ public final class DshAdapter: AgentAdapter, @unchecked Sendable {
                         summary.detailIsCommand = false
                     }
                 }
+            } else if type == "approval/asked" {
+                if let data = json["data"] as? [String: Any],
+                   let callId = data["callId"] as? String {
+                    approvalCallIds.insert(callId)
+                    summary.hasPendingApproval = true
+                    summary.detail = data["reason"] as? String ?? "请批准工具执行"
+                    summary.detailIsCommand = false
+                }
             } else if type == "tool/result" {
                 if let data = json["data"] as? [String: Any] {
                     var callId = data["toolCallId"] as? String ?? data["callId"] as? String
@@ -300,6 +315,8 @@ public final class DshAdapter: AgentAdapter, @unchecked Sendable {
                     }
                     if let cid = callId {
                         pendingCallIds.remove(cid)
+                        approvalCallIds.remove(cid)
+                        summary.hasPendingApproval = !approvalCallIds.isEmpty
                         questionCallIds.remove(cid)
                         if questionCallIds.isEmpty {
                             summary.hasWaitingQuestion = false
