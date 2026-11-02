@@ -44,25 +44,38 @@ public final class MonitorViewModel: ObservableObject {
     public let sessionStore: SessionStore
     public let reminderScheduler: ReminderScheduler = ReminderScheduler()
     private let notifier = Notifier.shared
+    private var rawSessions: [AgentSession] = []
     private var pauseExpiryTimer: DispatchSourceTimer?
     private var reminderTimer: DispatchSourceTimer?
     private var cancellables = Set<AnyCancellable>()
 
     public var highestState: SessionState? {
-        if sessions.contains(where: { $0.state == .waitingForUser }) {
+        let active = sessions.filter { s in
+            if let rule = MuteRule.matchingRule(for: s.cwd, rules: AppSettings.shared.muteRules), rule.scope == .all {
+                return false
+            }
+            return true
+        }
+        if active.contains(where: { $0.state == .waitingForUser }) {
             return .waitingForUser
         }
-        if sessions.contains(where: { $0.state == .completed }) {
+        if active.contains(where: { $0.state == .completed }) {
             return .completed
         }
-        if sessions.contains(where: { $0.state == .running }) {
+        if active.contains(where: { $0.state == .running }) {
             return .running
         }
         return nil
     }
 
     public var waitingCount: Int {
-        sessions.filter { $0.state == .waitingForUser }.count
+        sessions.filter { s in
+            guard s.state == .waitingForUser else { return false }
+            if let rule = MuteRule.matchingRule(for: s.cwd, rules: AppSettings.shared.muteRules), rule.scope == .all {
+                return false
+            }
+            return true
+        }.count
     }
 
     public var hasOverdueWaitingSessions: Bool {
@@ -131,12 +144,13 @@ public final class MonitorViewModel: ObservableObject {
 
         if let mock = env["AGENT_MONITOR_MOCK_DATA"] {
             if mock.lowercased() == "empty" {
-                self.sessions = []
+                self.rawSessions = []
             } else if mock.lowercased() == "large" {
-                self.sessions = MonitorViewModel.mockSessionsLarge()
+                self.rawSessions = MonitorViewModel.mockSessionsLarge()
             } else {
-                self.sessions = MonitorViewModel.mockSessions()
+                self.rawSessions = MonitorViewModel.mockSessions()
             }
+            applyMuteFilters()
             updatePauseState()
             return
         }
@@ -160,6 +174,14 @@ public final class MonitorViewModel: ObservableObject {
             }
             .store(in: &cancellables)
 
+        AppSettings.shared.$muteRules
+            .dropFirst()
+            .sink { [weak self] _ in
+                self?.applyMuteFilters()
+                self?.objectWillChange.send()
+            }
+            .store(in: &cancellables)
+
         reminderScheduler.remindAfterMinutes = AppSettings.shared.remindAfterMinutes
         reminderScheduler.remindMaxCount = AppSettings.shared.remindMaxCount
 
@@ -179,12 +201,7 @@ public final class MonitorViewModel: ObservableObject {
 
         sessionStore.onSessionsUpdated = { [weak self] updated in
             Task { @MainActor in
-                guard let self = self else { return }
-                if self.sessions != updated {
-                    self.sessions = updated
-                }
-                self.checkPauseExpiry()
-                self.checkReminders()
+                self?.updateSessionsManually(updated)
             }
         }
 
@@ -233,7 +250,14 @@ public final class MonitorViewModel: ObservableObject {
             return
         }
 
-        let dueList = reminderScheduler.evaluate(sessions: sessions, now: now)
+        let eligible = sessions.filter { s in
+            if let rule = MuteRule.matchingRule(for: s.cwd, rules: settings.muteRules), rule.scope == .all {
+                return false
+            }
+            return true
+        }
+
+        let dueList = reminderScheduler.evaluate(sessions: eligible, now: now)
         for (session, index) in dueList {
             notifier.sendReminder(for: session, index: index)
         }
@@ -411,14 +435,36 @@ public final class MonitorViewModel: ObservableObject {
         return list
     }
 
+    public func updateSessionsManually(_ sessions: [AgentSession]) {
+        self.rawSessions = sessions
+        self.applyMuteFilters()
+        self.checkPauseExpiry()
+        self.checkReminders()
+    }
+
+    private func applyMuteFilters() {
+        let rules = AppSettings.shared.muteRules
+        let filtered = rawSessions.filter { s in
+            if let rule = MuteRule.matchingRule(for: s.cwd, rules: rules), rule.hideInPanel {
+                return false
+            }
+            return true
+        }
+        if self.sessions != filtered {
+            self.sessions = filtered
+        }
+    }
+
     public func markAsRead(id: String) {
         sessionStore.markAsRead(id: id)
-        sessions = sessionStore.currentSessions
+        rawSessions = sessionStore.currentSessions
+        applyMuteFilters()
     }
 
     public func markAllAsRead() {
         sessionStore.markAllAsRead()
-        sessions = sessionStore.currentSessions
+        rawSessions = sessionStore.currentSessions
+        applyMuteFilters()
     }
 
     public func togglePauseNotifications() {
@@ -488,6 +534,7 @@ public final class MonitorViewModel: ObservableObject {
             rules.append(MuteRule(path: cleanPath, scope: scope, hideInPanel: false))
         }
         AppSettings.shared.muteRules = rules
+        applyMuteFilters()
     }
 
     public func hideInPanel(cwd: String?) {
@@ -502,5 +549,6 @@ public final class MonitorViewModel: ObservableObject {
             rules.append(MuteRule(path: cleanPath, scope: .all, hideInPanel: true))
         }
         AppSettings.shared.muteRules = rules
+        applyMuteFilters()
     }
 }
