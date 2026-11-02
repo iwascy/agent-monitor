@@ -54,10 +54,23 @@ struct SessionRow: View {
     private var timeView: some View {
         switch session.state {
         case .waitingForUser:
-            Text(session.formattedTime)
-                .font(.system(size: 11, weight: .medium))
-                .monospacedDigit()
-                .foregroundColor(.orange)
+            TimelineView(.periodic(from: .now, by: 30)) { context in
+                let now = context.date
+                let threshold = Double(AppSettings.shared.remindAfterMinutes * 60)
+                let isOverdue = AppSettings.shared.remindEnabled && (now.timeIntervalSince(session.stateSince) >= threshold)
+                let timeStr = StatusStyle.formattedTime(session: session, now: now)
+
+                HStack(spacing: 3) {
+                    if isOverdue {
+                        Image(systemName: "alarm.fill")
+                            .font(.system(size: 11))
+                    }
+                    Text(timeStr)
+                        .font(.system(size: 11, weight: isOverdue ? .semibold : .medium))
+                        .monospacedDigit()
+                }
+                .foregroundColor(isOverdue ? .red : .orange)
+            }
         case .completed:
             Text(session.formattedTime)
                 .font(.system(size: 11))

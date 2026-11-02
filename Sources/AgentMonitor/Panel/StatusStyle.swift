@@ -43,15 +43,15 @@ extension SessionState {
 }
 
 public struct StatusStyle {
-    public static func formattedTime(session: AgentSession) -> String {
+    public static func formattedTime(session: AgentSession, now: Date = Date()) -> String {
         switch session.state {
         case .running:
-            let elapsed = max(0, Int(Date().timeIntervalSince(session.stateSince)))
+            let elapsed = max(0, Int(now.timeIntervalSince(session.stateSince)))
             let m = elapsed / 60
             let s = elapsed % 60
             return String(format: "%d:%02d", m, s)
         case .waitingForUser:
-            let diff = max(0, Int(Date().timeIntervalSince(session.stateSince)))
+            let diff = max(0, Int(now.timeIntervalSince(session.stateSince)))
             let m = diff / 60
             if m < 1 {
                 return "刚刚"
@@ -62,7 +62,7 @@ public struct StatusStyle {
                 return "\(h) 小时"
             }
         case .completed, .idle:
-            let diff = max(0, Int(Date().timeIntervalSince(session.lastActivity)))
+            let diff = max(0, Int(now.timeIntervalSince(session.lastActivity)))
             let m = diff / 60
             if m < 1 {
                 return "刚刚"

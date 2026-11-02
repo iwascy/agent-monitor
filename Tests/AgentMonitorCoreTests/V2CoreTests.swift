@@ -265,6 +265,17 @@ struct V2CoreTests {
             #expect(actual == tc.expected, "Failed test case: \(tc.name)")
         }
     }
+
+    @Test("MenuBarIconRenderer: isOverdue does not change size, only changes badge color")
+    func testMenuBarIconRendererOverdue() {
+        let sizeNormal = MenuBarIconRenderer.size(highestState: .waitingForUser, waitingCount: 2, isPaused: false, isOverdue: false)
+        let sizeOverdue = MenuBarIconRenderer.size(highestState: .waitingForUser, waitingCount: 2, isPaused: false, isOverdue: true)
+        #expect(sizeNormal == sizeOverdue)
+
+        let imgNormal = MenuBarIconRenderer.image(highestState: .waitingForUser, waitingCount: 2, isPaused: false, isOverdue: false)
+        let imgOverdue = MenuBarIconRenderer.image(highestState: .waitingForUser, waitingCount: 2, isPaused: false, isOverdue: true)
+        #expect(imgNormal.size == imgOverdue.size)
+    }
 }
 
 private final class MockAdapter: AgentAdapter, @unchecked Sendable {

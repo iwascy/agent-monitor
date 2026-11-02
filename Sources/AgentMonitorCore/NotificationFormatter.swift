@@ -31,6 +31,11 @@ public struct NotificationFormatter {
         return ""
     }
 
+    public static func formatReminderSubtitle(for session: AgentSession, now: Date = Date()) -> String {
+        let minutes = max(0, Int(now.timeIntervalSince(session.stateSince) / 60))
+        return "仍在等你 · 已等 \(minutes) 分钟"
+    }
+
     public static func formatDuration(seconds: Int) -> String {
         let m = seconds / 60
         let s = seconds % 60

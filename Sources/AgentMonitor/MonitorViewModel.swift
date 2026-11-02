@@ -42,8 +42,10 @@ public final class MonitorViewModel: ObservableObject {
     }
 
     public let sessionStore: SessionStore
+    public let reminderScheduler: ReminderScheduler = ReminderScheduler()
     private let notifier = Notifier.shared
     private var pauseExpiryTimer: DispatchSourceTimer?
+    private var reminderTimer: DispatchSourceTimer?
     private var cancellables = Set<AnyCancellable>()
 
     public var highestState: SessionState? {
@@ -63,24 +65,44 @@ public final class MonitorViewModel: ObservableObject {
         sessions.filter { $0.state == .waitingForUser }.count
     }
 
-    public var effectiveMenuState: (highestState: SessionState?, waitingCount: Int, isPaused: Bool) {
+    public var hasOverdueWaitingSessions: Bool {
+        let settings = AppSettings.shared
+        guard settings.remindEnabled else { return false }
+        let threshold = Double(settings.remindAfterMinutes * 60)
+        let now = Date()
+        return sessions.contains { session in
+            guard session.state == .waitingForUser else { return false }
+            if let rule = MuteRule.matchingRule(for: session.cwd, rules: settings.muteRules), rule.scope == .all {
+                return false
+            }
+            return now.timeIntervalSince(session.stateSince) >= threshold
+        }
+    }
+
+    public var effectiveMenuState: (highestState: SessionState?, waitingCount: Int, isPaused: Bool, isOverdue: Bool) {
+        let settings = AppSettings.shared
+        let overdue = settings.overdueBadgeRed && hasOverdueWaitingSessions
+        let count = settings.showWaitingCountInMenuBar ? waitingCount : 0
+
         if let env = ProcessInfo.processInfo.environment["AGENT_MONITOR_MENU_STATE"]?.lowercased() {
             switch env {
             case "idle":
-                return (highestState: nil, waitingCount: 0, isPaused: false)
+                return (highestState: nil, waitingCount: 0, isPaused: false, isOverdue: false)
             case "running":
-                return (highestState: .running, waitingCount: 0, isPaused: false)
+                return (highestState: .running, waitingCount: 0, isPaused: false, isOverdue: false)
             case "completed":
-                return (highestState: .completed, waitingCount: 0, isPaused: false)
+                return (highestState: .completed, waitingCount: 0, isPaused: false, isOverdue: false)
             case "waiting":
-                return (highestState: .waitingForUser, waitingCount: 2, isPaused: false)
+                return (highestState: .waitingForUser, waitingCount: 2, isPaused: false, isOverdue: false)
             case "paused":
-                return (highestState: .waitingForUser, waitingCount: 0, isPaused: true)
+                return (highestState: .waitingForUser, waitingCount: 0, isPaused: true, isOverdue: false)
+            case "overdue":
+                return (highestState: .waitingForUser, waitingCount: 2, isPaused: false, isOverdue: true)
             default:
                 break
             }
         }
-        return (highestState: highestState, waitingCount: waitingCount, isPaused: isNotificationsPaused)
+        return (highestState: highestState, waitingCount: count, isPaused: isNotificationsPaused, isOverdue: overdue)
     }
 
     public init(sessionStore: SessionStore) {
@@ -138,6 +160,23 @@ public final class MonitorViewModel: ObservableObject {
             }
             .store(in: &cancellables)
 
+        reminderScheduler.remindAfterMinutes = AppSettings.shared.remindAfterMinutes
+        reminderScheduler.remindMaxCount = AppSettings.shared.remindMaxCount
+
+        AppSettings.shared.$remindAfterMinutes
+            .dropFirst()
+            .sink { [weak self] m in
+                self?.reminderScheduler.remindAfterMinutes = m
+            }
+            .store(in: &cancellables)
+
+        AppSettings.shared.$remindMaxCount
+            .dropFirst()
+            .sink { [weak self] c in
+                self?.reminderScheduler.remindMaxCount = c
+            }
+            .store(in: &cancellables)
+
         sessionStore.onSessionsUpdated = { [weak self] updated in
             Task { @MainActor in
                 guard let self = self else { return }
@@ -145,6 +184,7 @@ public final class MonitorViewModel: ObservableObject {
                     self.sessions = updated
                 }
                 self.checkPauseExpiry()
+                self.checkReminders()
             }
         }
 
@@ -152,6 +192,7 @@ public final class MonitorViewModel: ObservableObject {
             Task { @MainActor in
                 guard let self = self else { return }
                 self.notifier.notify(transition: transition, isPanelVisible: self.sessionStore.isPanelVisible)
+                self.checkReminders()
             }
         }
 
@@ -162,7 +203,36 @@ public final class MonitorViewModel: ObservableObject {
         }
 
         updatePauseState()
+        startReminderTimer()
         sessionStore.start()
+    }
+
+    private func startReminderTimer() {
+        reminderTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + 30.0, repeating: 30.0)
+        timer.setEventHandler { [weak self] in
+            self?.checkReminders()
+        }
+        timer.resume()
+        self.reminderTimer = timer
+    }
+
+    public func checkReminders(now: Date = Date()) {
+        let settings = AppSettings.shared
+        guard !isNotificationsPaused,
+              settings.remindEnabled,
+              settings.notifyWaiting else {
+            return
+        }
+        if settings.silenceWhilePanelOpen && sessionStore.isPanelVisible {
+            return
+        }
+
+        let dueList = reminderScheduler.evaluate(sessions: sessions, now: now)
+        for (session, index) in dueList {
+            notifier.sendReminder(for: session, index: index)
+        }
     }
 
     public static func mockSessions() -> [AgentSession] {

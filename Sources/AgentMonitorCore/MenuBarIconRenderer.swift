@@ -4,7 +4,8 @@ public struct MenuBarIconRenderer {
     public static func size(
         highestState: SessionState?,
         waitingCount: Int,
-        isPaused: Bool
+        isPaused: Bool,
+        isOverdue: Bool = false
     ) -> NSSize {
         var width: CGFloat = 16.0
         if waitingCount > 0 {
@@ -45,9 +46,10 @@ public struct MenuBarIconRenderer {
     public static func image(
         highestState: SessionState?,
         waitingCount: Int,
-        isPaused: Bool
+        isPaused: Bool,
+        isOverdue: Bool = false
     ) -> NSImage {
-        let iconSize = size(highestState: highestState, waitingCount: waitingCount, isPaused: isPaused)
+        let iconSize = size(highestState: highestState, waitingCount: waitingCount, isPaused: isPaused, isOverdue: isOverdue)
         let template = isTemplate(highestState: highestState, waitingCount: waitingCount)
         let dot = dotColor(for: highestState)
 
@@ -104,13 +106,18 @@ public struct MenuBarIconRenderer {
                 let badgeRect = CGRect(x: currentX, y: (16.0 - 15.0) / 2.0, width: badgeWidth, height: 15.0)
 
                 ctx.saveGState()
-                let srgbOrange = NSColor.systemOrange.usingColorSpace(.sRGB) ?? NSColor.systemOrange
-                let badgeColor = NSColor(
-                    srgbRed: srgbOrange.redComponent * 0.65,
-                    green: srgbOrange.greenComponent * 0.65,
-                    blue: srgbOrange.blueComponent * 0.65,
-                    alpha: 1.0
-                )
+                let badgeColor: NSColor
+                if isOverdue {
+                    badgeColor = NSColor(srgbRed: 0xD7 / 255.0, green: 0, blue: 0x15 / 255.0, alpha: 1.0)
+                } else {
+                    let srgbOrange = NSColor.systemOrange.usingColorSpace(.sRGB) ?? NSColor.systemOrange
+                    badgeColor = NSColor(
+                        srgbRed: srgbOrange.redComponent * 0.65,
+                        green: srgbOrange.greenComponent * 0.65,
+                        blue: srgbOrange.blueComponent * 0.65,
+                        alpha: 1.0
+                    )
+                }
                 ctx.setFillColor(badgeColor.cgColor)
                 let badgePath = CGPath(roundedRect: badgeRect, cornerWidth: 7.5, cornerHeight: 7.5, transform: nil)
                 ctx.addPath(badgePath)

@@ -36,7 +36,10 @@ struct SessionList: View {
 
                 if viewModel.filterState == nil || viewModel.filterState == .waitingForUser {
                     if !waitingSessions.isEmpty {
-                        sectionHeader(title: "等你回复", dotColor: .orange)
+                        let threshold = Double(AppSettings.shared.remindAfterMinutes * 60)
+                        let overdueCount = AppSettings.shared.remindEnabled ? waitingSessions.filter { Date().timeIntervalSince($0.stateSince) >= threshold }.count : 0
+                        let overdueText: Text? = overdueCount > 0 ? Text("· \(overdueCount) 个已超时").foregroundColor(.red) : nil
+                        sectionHeader(title: "等你回复", dotColor: .orange, trailing: overdueText)
                         ForEach(waitingSessions) { session in
                             SessionRow(session: session, viewModel: viewModel)
                         }
@@ -197,7 +200,7 @@ struct SessionList: View {
         }
     }
 
-    private func sectionHeader(title: String, dotColor: Color) -> some View {
+    private func sectionHeader(title: String, dotColor: Color, trailing: Text? = nil) -> some View {
         HStack(spacing: 6) {
             Circle()
                 .fill(dotColor)
@@ -205,6 +208,10 @@ struct SessionList: View {
             Text(title)
                 .font(.caption.weight(.semibold))
                 .foregroundColor(.secondary)
+            if let trailing = trailing {
+                trailing
+                    .font(.system(size: 10, weight: .semibold))
+            }
         }
         .padding(EdgeInsets(top: 6, leading: 8, bottom: 0, trailing: 8))
     }

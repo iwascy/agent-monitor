@@ -176,6 +176,61 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
+    public func sendReminder(for session: AgentSession, index: Int) {
+        let settings = AppSettings.shared
+        guard !isPaused,
+              settings.remindEnabled,
+              settings.notifyWaiting else {
+            return
+        }
+
+        if let rule = MuteRule.matchingRule(for: session.cwd, rules: settings.muteRules), rule.scope == .all {
+            return
+        }
+
+        let now = Date()
+        let content = UNMutableNotificationContent()
+        content.title = NotificationFormatter.formatTitle(for: session)
+        content.subtitle = NotificationFormatter.formatReminderSubtitle(for: session, now: now)
+        content.body = NotificationFormatter.formatBody(for: session)
+        content.threadIdentifier = session.id
+        content.sound = Self.notificationSound(name: settings.waitingSound)
+        content.userInfo = [
+            "sessionId": session.id,
+            "kind": session.kind.rawValue,
+            "cwd": session.cwd ?? "",
+            "entrypoint": session.entrypoint ?? ""
+        ]
+
+        if let cachedURL = IconManager.shared.cachedIconPNGURL(for: session.kind) {
+            let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("png")
+            do {
+                try FileManager.default.copyItem(at: cachedURL, to: tempURL)
+                let attachment = try UNNotificationAttachment(identifier: "icon-\(session.kind.rawValue)", url: tempURL, options: nil)
+                content.attachments = [attachment]
+            } catch {
+                NSLog("Failed to attach agent icon to notification: %@", error.localizedDescription)
+            }
+        }
+
+        let reminderId = "\(session.id)-remind"
+        let center = UNUserNotificationCenter.current()
+        center.removeDeliveredNotifications(withIdentifiers: [reminderId])
+
+        let request = UNNotificationRequest(
+            identifier: reminderId,
+            content: content,
+            trigger: nil
+        )
+
+        guard Bundle.main.bundleIdentifier != nil else { return }
+        center.add(request) { error in
+            if let error = error {
+                NSLog("Failed to deliver reminder notification: %@", error.localizedDescription)
+            }
+        }
+    }
+
     private func formatDuration(seconds: Int) -> String {
         let m = seconds / 60
         let s = seconds % 60

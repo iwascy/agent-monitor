@@ -14,7 +14,8 @@ public struct MenuBarLabelView: View {
         Image(nsImage: MenuBarIconRenderer.image(
             highestState: state.highestState,
             waitingCount: state.waitingCount,
-            isPaused: state.isPaused
+            isPaused: state.isPaused,
+            isOverdue: state.isOverdue
         ))
     }
 }
