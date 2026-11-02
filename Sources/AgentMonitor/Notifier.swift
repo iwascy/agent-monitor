@@ -84,7 +84,8 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         } else if name == "none" {
             return nil
         } else {
-            return UNNotificationSound(named: UNNotificationSoundName("\(name).aiff"))
+            // 系统音目录不在通知声音的搜索路径中，使用默认音作为回退。
+            return .default
         }
     }
 

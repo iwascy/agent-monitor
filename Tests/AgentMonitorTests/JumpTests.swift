@@ -42,7 +42,7 @@ struct JumpTests {
 
     @Test("SessionJumper: target resolution fallbacks")
     @MainActor
-    func testSessionJumperTargetResolution() {
+    func testSessionJumperTargetResolution() async {
         let jumper = SessionJumper.shared
 
         // Claude Code without pid -> Terminal or Claude desktop
@@ -73,7 +73,7 @@ struct JumpTests {
         }
 
         // describeTarget should return readable description without crashing
-        let desc = jumper.describeTarget(for: sAgy)
+        let desc = await jumper.describeTarget(for: sAgy)
         #expect(desc != nil && !desc!.isEmpty)
     }
 }

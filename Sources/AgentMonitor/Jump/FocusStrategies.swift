@@ -7,10 +7,38 @@ import UserNotifications
 public final class FocusStrategies {
     public static let shared = FocusStrategies()
 
+    struct AppleScriptResult: Sendable {
+        var success: Bool
+        var wasDenied: Bool
+    }
+
+    @MainActor private final class ScriptCompletion {
+        private var continuation: CheckedContinuation<Bool, Never>?
+
+        init(_ continuation: CheckedContinuation<Bool, Never>) {
+            self.continuation = continuation
+        }
+
+        func finish(_ result: Bool) {
+            let pending = continuation
+            continuation = nil
+            pending?.resume(returning: result)
+        }
+    }
+
     private var deniedAppleScriptHosts: Set<String> = []
     private var hasNotifiedAccessibilityPermission = false
+    private let appleScriptTimeout: Duration
+    private let executeAppleScript: @Sendable (String) -> AppleScriptResult
 
-    public init() {}
+    public convenience init() {
+        self.init(appleScriptTimeout: .seconds(2), executeAppleScript: Self.executeScript)
+    }
+
+    init(appleScriptTimeout: Duration, executeAppleScript: @escaping @Sendable (String) -> AppleScriptResult) {
+        self.appleScriptTimeout = appleScriptTimeout
+        self.executeAppleScript = executeAppleScript
+    }
 
     nonisolated public static func normalizeTitle(_ raw: String) -> String {
         var str = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -144,7 +172,7 @@ public final class FocusStrategies {
     }
 
     public func matchAndFocusWindow(app: NSRunningApplication, titleHint: String?, cwd: String?) -> Bool {
-        guard let win = findMatchingWindow(app: app, titleHint: titleHint, cwd: cwd) else {
+        guard let win = Self.findMatchingWindow(app: app, titleHint: titleHint, cwd: cwd) else {
             return false
         }
         AXUIElementSetAttributeValue(win, kAXMainAttribute as CFString, kCFBooleanTrue)
@@ -153,7 +181,7 @@ public final class FocusStrategies {
         return true
     }
 
-    public func findMatchingWindow(app: NSRunningApplication, titleHint: String?, cwd: String?) -> AXUIElement? {
+    nonisolated public static func findMatchingWindow(app: NSRunningApplication, titleHint: String?, cwd: String?) -> AXUIElement? {
         let axApp = AXUIElementCreateApplication(app.processIdentifier)
         var windowsVal: AnyObject?
         guard AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windowsVal) == .success,
@@ -191,7 +219,7 @@ public final class FocusStrategies {
         return exactMatch ?? containsTitleMatch ?? containsCwdMatch
     }
 
-    public func getMatchedWindowTitle(app: NSRunningApplication, titleHint: String?, cwd: String?) -> String? {
+    nonisolated public static func getMatchedWindowTitle(app: NSRunningApplication, titleHint: String?, cwd: String?) -> String? {
         guard AXIsProcessTrusted() else { return nil }
         guard let win = findMatchingWindow(app: app, titleHint: titleHint, cwd: cwd) else { return nil }
         var titleVal: AnyObject?
@@ -202,7 +230,7 @@ public final class FocusStrategies {
         return nil
     }
 
-    private func shouldAttemptAppleScript(for bundleId: String) -> Bool {
+    func shouldAttemptAppleScript(for bundleId: String) -> Bool {
         return !deniedAppleScriptHosts.contains(bundleId)
     }
 
@@ -211,45 +239,41 @@ public final class FocusStrategies {
                   .replacingOccurrences(of: "\"", with: "\\\"")
     }
 
-    private func runAppleScriptWithTimeout(_ source: String, bundleId: String) async -> Bool {
-        await withTaskGroup(of: Bool.self) { group in
-            // AppleScript 脚本放进后台 Task
-            group.addTask {
-                let (success, wasDenied) = await Task.detached(priority: .userInitiated) { () -> (Bool, Bool) in
-                    var errorInfo: NSDictionary?
-                    let appleScript = NSAppleScript(source: source)
-                    let resultDesc = appleScript?.executeAndReturnError(&errorInfo)
-                    var denied = false
-                    var ok = false
-                    if let error = errorInfo {
-                        let code = (error[NSAppleScript.errorNumber] as? NSNumber)?.intValue ?? 0
-                        if code == -1743 { // errAEEventNotPermitted
-                            denied = true
-                        }
-                    } else if let result = resultDesc, result.booleanValue {
-                        ok = true
-                    }
-                    return (ok, denied)
-                }.value
+    func runAppleScriptWithTimeout(_ source: String, bundleId: String) async -> Bool {
+        let execute = executeAppleScript
+        return await withCheckedContinuation { continuation in
+            let completion = ScriptCompletion(continuation)
+            let timeout = Task { @MainActor in
+                do {
+                    try await Task.sleep(for: appleScriptTimeout)
+                } catch {
+                    return
+                }
+                completion.finish(false)
+            }
 
-                if wasDenied {
-                    _ = await MainActor.run {
+            // 非结构化任务允许超时直接返回；脚本稍后完成时仍记录授权拒绝。
+            Task.detached(priority: .userInitiated) { [self] in
+                let result = execute(source)
+                await MainActor.run {
+                    if result.wasDenied {
                         self.deniedAppleScriptHosts.insert(bundleId)
                     }
+                    timeout.cancel()
+                    completion.finish(result.success)
                 }
-                return success
             }
-
-            // 超时 Task: 2 秒与脚本竞速，避免主线程冻结 UI
-            group.addTask {
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-                return false
-            }
-
-            let result = await group.next() ?? false
-            group.cancelAll()
-            return result
         }
+    }
+
+    nonisolated private static func executeScript(_ source: String) -> AppleScriptResult {
+        var errorInfo: NSDictionary?
+        let result = NSAppleScript(source: source)?.executeAndReturnError(&errorInfo)
+        let errorCode = (errorInfo?[NSAppleScript.errorNumber] as? NSNumber)?.intValue
+        return AppleScriptResult(
+            success: errorInfo == nil && result?.booleanValue == true,
+            wasDenied: errorCode == -1743
+        )
     }
 
     private func notifyAccessibilityPermissionIfNeeded() {

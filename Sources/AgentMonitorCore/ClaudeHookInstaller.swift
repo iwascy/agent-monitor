@@ -287,13 +287,15 @@ public final class ClaudeHookInstaller: @unchecked Sendable {
                         return !Self.isAgentMonitorHook(command: cmd)
                     }
 
-                    if filtered.count != hookList.count {
+                    if filtered.count == hookList.count {
+                        // 包括原本就为空的 hooks；未删除我们的命令时原样保留。
+                        cleanedEntries.append(item)
+                    } else if !filtered.isEmpty {
                         hasChanges = true
-                    }
-
-                    if !filtered.isEmpty {
                         entryDict["hooks"] = filtered
                         cleanedEntries.append(entryDict)
+                    } else {
+                        hasChanges = true
                     }
                 } else {
                     cleanedEntries.append(item)
@@ -306,7 +308,9 @@ public final class ClaudeHookInstaller: @unchecked Sendable {
 
             if !cleanedEntries.isEmpty {
                 updatedHooks[eventKey] = cleanedEntries
-            } else if !entries.isEmpty {
+            } else if entries.isEmpty {
+                updatedHooks[eventKey] = entries
+            } else {
                 hasChanges = true
             }
         }
@@ -370,9 +374,12 @@ public final class ClaudeHookInstaller: @unchecked Sendable {
 
         if backup && fm.fileExists(atPath: realURL.path) {
             let backupURL = parentDir.appendingPathComponent("settings.json.agentmonitor-backup")
+            let backupTempURL = parentDir.appendingPathComponent("settings.json.backup.tmp.\(UUID().uuidString)")
+            defer { try? fm.removeItem(at: backupTempURL) }
             do {
-                let existingBytes = try Data(contentsOf: realURL)
-                try existingBytes.write(to: backupURL, options: .atomic)
+                // copyItem 同时保留权限和 ACL；rename 避免跟随已有备份的符号链接。
+                try fm.copyItem(at: realURL, to: backupTempURL)
+                try atomicRename(from: backupTempURL, to: backupURL)
             } catch {
                 throw ClaudeHookInstallerError.writeFailed("备份 settings.json 失败: \(error.localizedDescription)")
             }
@@ -386,15 +393,35 @@ public final class ClaudeHookInstaller: @unchecked Sendable {
         }
 
         let tempURL = parentDir.appendingPathComponent("settings.json.tmp.\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: tempURL) }
         do {
-            try outputData.write(to: tempURL, options: .atomic)
+            let permissions: Int
+            if fm.fileExists(atPath: realURL.path) {
+                let attrs = try fm.attributesOfItem(atPath: realURL.path)
+                permissions = (attrs[.posixPermissions] as? NSNumber)?.intValue ?? 0o600
+                try fm.copyItem(at: realURL, to: tempURL)
+                try fm.setAttributes([.posixPermissions: permissions | 0o200], ofItemAtPath: tempURL.path)
+            } else {
+                permissions = 0o600
+                guard fm.createFile(atPath: tempURL.path, contents: nil, attributes: [.posixPermissions: permissions]) else {
+                    throw ClaudeHookInstallerError.writeFailed("无法创建临时文件")
+                }
+            }
+            let handle = try FileHandle(forWritingTo: tempURL)
+            defer { try? handle.close() }
+            try handle.truncate(atOffset: 0)
+            try handle.write(contentsOf: outputData)
+            try handle.synchronize()
+            try fm.setAttributes([.posixPermissions: permissions], ofItemAtPath: tempURL.path)
+            try atomicRename(from: tempURL, to: realURL)
         } catch {
-            throw ClaudeHookInstallerError.writeFailed("写入临时文件失败: \(error.localizedDescription)")
+            throw ClaudeHookInstallerError.writeFailed("写入配置失败: \(error.localizedDescription)")
         }
+    }
 
-        if rename(tempURL.path, realURL.path) != 0 {
+    private func atomicRename(from source: URL, to destination: URL) throws {
+        if rename(source.path, destination.path) != 0 {
             let errStr = String(cString: strerror(errno))
-            try? fm.removeItem(at: tempURL)
             throw ClaudeHookInstallerError.writeFailed("原子覆盖真实文件失败: \(errStr)")
         }
     }

@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 import AgentMonitorCore
 
-public enum JumpTarget {
+public enum JumpTarget: Sendable {
     case terminal(host: HostInfo, windowHint: String?)
     case editor(bundleId: String, folder: URL)
     case app(bundleId: String)
@@ -12,7 +12,7 @@ public enum JumpTarget {
 public final class SessionJumper {
     public static let shared = SessionJumper()
 
-    public static let editorBundleIds: Set<String> = [
+    nonisolated public static let editorBundleIds: Set<String> = [
         "com.microsoft.VSCode",
         "com.microsoft.VSCodeInsiders",
         "com.todesktop.230313mzl4w4u92", // Cursor
@@ -20,7 +20,7 @@ public final class SessionJumper {
         "dev.zed.Zed"
     ]
 
-    public static let terminalBundleIds: [String] = [
+    nonisolated public static let terminalBundleIds: [String] = [
         "com.googlecode.iterm2",
         "dev.warp.Warp-Stable",
         "com.mitchellh.ghostty",
@@ -30,9 +30,17 @@ public final class SessionJumper {
         "com.apple.Terminal"
     ]
 
-    public init() {}
+    private let describe: @Sendable (AgentSession) -> String?
 
-    public static func firstRunningTerminalBundleId() -> String {
+    public init() {
+        self.describe = Self.computeDescribeTarget
+    }
+
+    init(describe: @escaping @Sendable (AgentSession) -> String?) {
+        self.describe = describe
+    }
+
+    nonisolated public static func firstRunningTerminalBundleId() -> String {
         for id in terminalBundleIds {
             if !NSRunningApplication.runningApplications(withBundleIdentifier: id).isEmpty {
                 return id
@@ -46,7 +54,7 @@ public final class SessionJumper {
         return "com.apple.Terminal"
     }
 
-    public static func codexDesktopBundleId() -> String {
+    nonisolated public static func codexDesktopBundleId() -> String {
         let candidates = ["com.openai.codex", "com.openai.chat"]
         for id in candidates {
             if !NSRunningApplication.runningApplications(withBundleIdentifier: id).isEmpty {
@@ -67,6 +75,10 @@ public final class SessionJumper {
     }
 
     public func target(for session: AgentSession) -> JumpTarget {
+        Self.resolveTarget(for: session)
+    }
+
+    nonisolated private static func resolveTarget(for session: AgentSession) -> JumpTarget {
         if let pid = session.pid, let host = HostResolver.shared.resolve(pid: pid) {
             let bundleId = host.app.bundleIdentifier ?? ""
             if Self.editorBundleIds.contains(bundleId) {
@@ -122,22 +134,25 @@ public final class SessionJumper {
     private var targetDescCache: [String: TargetDescCacheEntry] = [:]
     private let targetDescTTL: TimeInterval = 5.0
 
-    public func describeTarget(for session: AgentSession) -> String? {
+    public func describeTarget(for session: AgentSession) async -> String? {
         let now = Date()
         if let entry = targetDescCache[session.id], now.timeIntervalSince(entry.timestamp) < targetDescTTL {
             return entry.description
         }
-        let desc = computeDescribeTarget(for: session)
-        targetDescCache[session.id] = TargetDescCacheEntry(description: desc, timestamp: now)
+        let describe = self.describe
+        let desc = await Task.detached(priority: .utility) {
+            describe(session)
+        }.value
+        targetDescCache[session.id] = TargetDescCacheEntry(description: desc, timestamp: Date())
         return desc
     }
 
-    private func computeDescribeTarget(for session: AgentSession) -> String? {
-        let tgt = target(for: session)
+    nonisolated private static func computeDescribeTarget(for session: AgentSession) -> String? {
+        let tgt = resolveTarget(for: session)
         switch tgt {
         case .terminal(let host, let windowHint):
             let appName = host.app.localizedName ?? "终端"
-            if let matchedTitle = FocusStrategies.shared.getMatchedWindowTitle(app: host.app, titleHint: windowHint, cwd: session.cwd) {
+            if let matchedTitle = FocusStrategies.getMatchedWindowTitle(app: host.app, titleHint: windowHint, cwd: session.cwd) {
                 return "\(appName) · 窗口「\(matchedTitle)」"
             }
             if let tty = host.tty, !tty.isEmpty {

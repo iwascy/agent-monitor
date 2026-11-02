@@ -5,7 +5,6 @@ import AgentMonitorCore
 public struct MenuView: View {
     @ObservedObject var viewModel: MonitorViewModel
     @Environment(\.colorScheme) var colorScheme
-    @Environment(\.openSettings) private var openSettings
     @LocalState private var localMonitor: Any? = nil
     @LocalState private var panelWindow: NSWindow? = nil
 
@@ -51,9 +50,6 @@ public struct MenuView: View {
         .focusable()
         .focusEffectDisabled()
         .onAppear {
-            SettingsWindowManager.shared.openSettingsAction = {
-                openSettings()
-            }
             viewModel.onPanelAppear()
             if localMonitor == nil {
                 localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in

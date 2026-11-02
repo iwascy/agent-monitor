@@ -159,6 +159,9 @@ public final class HotkeyCenter: ObservableObject {
     private var eventHandlerRef: EventHandlerRef?
     private var isHandlerInstalled: Bool = false
     private var isPaused: Bool = false
+    private let settings: AppSettings
+    private let registerHotKey: (KeyCombo, UInt32) -> EventHotKeyRef?
+    private let unregisterHotKey: (EventHotKeyRef) -> Void
 
     private static let hotKeySignature: OSType = 0x414D4F4E // 'AMON'
     private static let toggleHotKeyID: UInt32 = 1
@@ -166,8 +169,25 @@ public final class HotkeyCenter: ObservableObject {
 
     private var cancellables = Set<AnyCancellable>()
 
-    public init() {
-        installHandlerIfNeeded()
+    public convenience init() {
+        self.init(
+            settings: .shared,
+            registerHotKey: Self.registerCarbonHotKey,
+            unregisterHotKey: { UnregisterEventHotKey($0) },
+            installsHandler: true
+        )
+    }
+
+    init(
+        settings: AppSettings,
+        registerHotKey: @escaping (KeyCombo, UInt32) -> EventHotKeyRef?,
+        unregisterHotKey: @escaping (EventHotKeyRef) -> Void,
+        installsHandler: Bool = false
+    ) {
+        self.settings = settings
+        self.registerHotKey = registerHotKey
+        self.unregisterHotKey = unregisterHotKey
+        if installsHandler { installHandlerIfNeeded() }
         bindSettings()
     }
 
@@ -176,14 +196,14 @@ public final class HotkeyCenter: ObservableObject {
     }
 
     private func bindSettings() {
-        AppSettings.shared.$hotkeyTogglePanel
+        settings.$hotkeyTogglePanel
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.registerAll()
             }
             .store(in: &cancellables)
 
-        AppSettings.shared.$hotkeyJumpWaiting
+        settings.$hotkeyJumpWaiting
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.registerAll()
@@ -195,34 +215,42 @@ public final class HotkeyCenter: ObservableObject {
 
     public func registerAll() {
         guard !isPaused else { return }
+        // 必须先释放两个旧组合键，否则第一个注册会撞上第二个的旧值。
+        unregisterAll()
         registerTogglePanel()
         registerJumpWaiting()
     }
 
+    private func unregisterAll() {
+        if let ref = toggleHotKeyRef { unregisterHotKey(ref) }
+        if let ref = jumpHotKeyRef { unregisterHotKey(ref) }
+        toggleHotKeyRef = nil
+        jumpHotKeyRef = nil
+    }
+
+    private static func registerCarbonHotKey(_ combo: KeyCombo, id: UInt32) -> EventHotKeyRef? {
+        let hkID = EventHotKeyID(signature: hotKeySignature, id: id)
+        var ref: EventHotKeyRef?
+        let status = RegisterEventHotKey(
+            combo.keyCode, combo.carbonModifiers, hkID,
+            GetApplicationEventTarget(), 0, &ref
+        )
+        return status == noErr ? ref : nil
+    }
+
     public func registerTogglePanel() {
         if let ref = toggleHotKeyRef {
-            UnregisterEventHotKey(ref)
+            unregisterHotKey(ref)
             toggleHotKeyRef = nil
         }
 
         guard !isPaused else { return }
-        guard let combo = AppSettings.shared.hotkeyTogglePanel else {
+        guard let combo = settings.hotkeyTogglePanel else {
             togglePanelConflict = false
             return
         }
 
-        let hkID = EventHotKeyID(signature: Self.hotKeySignature, id: Self.toggleHotKeyID)
-        var ref: EventHotKeyRef?
-        let status = RegisterEventHotKey(
-            combo.keyCode,
-            combo.carbonModifiers,
-            hkID,
-            GetApplicationEventTarget(),
-            0,
-            &ref
-        )
-
-        if status == noErr {
+        if let ref = registerHotKey(combo, Self.toggleHotKeyID) {
             toggleHotKeyRef = ref
             togglePanelConflict = false
         } else {
@@ -233,28 +261,17 @@ public final class HotkeyCenter: ObservableObject {
 
     public func registerJumpWaiting() {
         if let ref = jumpHotKeyRef {
-            UnregisterEventHotKey(ref)
+            unregisterHotKey(ref)
             jumpHotKeyRef = nil
         }
 
         guard !isPaused else { return }
-        guard let combo = AppSettings.shared.hotkeyJumpWaiting else {
+        guard let combo = settings.hotkeyJumpWaiting else {
             jumpWaitingConflict = false
             return
         }
 
-        let hkID = EventHotKeyID(signature: Self.hotKeySignature, id: Self.jumpHotKeyID)
-        var ref: EventHotKeyRef?
-        let status = RegisterEventHotKey(
-            combo.keyCode,
-            combo.carbonModifiers,
-            hkID,
-            GetApplicationEventTarget(),
-            0,
-            &ref
-        )
-
-        if status == noErr {
+        if let ref = registerHotKey(combo, Self.jumpHotKeyID) {
             jumpHotKeyRef = ref
             jumpWaitingConflict = false
         } else {
@@ -267,14 +284,7 @@ public final class HotkeyCenter: ObservableObject {
 
     public func pause() {
         isPaused = true
-        if let ref = toggleHotKeyRef {
-            UnregisterEventHotKey(ref)
-            toggleHotKeyRef = nil
-        }
-        if let ref = jumpHotKeyRef {
-            UnregisterEventHotKey(ref)
-            jumpHotKeyRef = nil
-        }
+        unregisterAll()
         togglePanelConflict = false
         jumpWaitingConflict = false
     }
@@ -332,7 +342,7 @@ public final class HotkeyCenter: ObservableObject {
             MenuBarExtraToggler.toggle()
         case Self.jumpHotKeyID:
             let sessions = sessionProvider?() ?? []
-            if let target = Self.selectJumpWaitingTarget(from: sessions, muteRules: AppSettings.shared.muteRules) {
+            if let target = Self.selectJumpWaitingTarget(from: sessions, muteRules: settings.muteRules) {
                 SessionJumper.shared.jump(to: target)
             }
         default:

@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 import AgentMonitorCore
 
 struct AgentSettingsView: View {
@@ -57,8 +58,11 @@ struct AgentSettingsView: View {
     }
 
     private func sessionCount(for kind: AgentKind) -> Int {
-        let list = sessionStore?.currentSessions ?? currentSessions
-        return list.filter { $0.kind == kind }.count
+        currentSessions.filter { $0.kind == kind }.count
+    }
+
+    private var sessionUpdates: AnyPublisher<[AgentSession], Never> {
+        sessionStore?.sessionsPublisher ?? Just([]).eraseToAnyPublisher()
     }
 
     var body: some View {
@@ -117,10 +121,8 @@ struct AgentSettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .onAppear {
-            if let store = sessionStore {
-                currentSessions = store.currentSessions
-            }
+        .onReceive(sessionUpdates.receive(on: DispatchQueue.main)) { sessions in
+            currentSessions = sessions
         }
     }
 }

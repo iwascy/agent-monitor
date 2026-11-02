@@ -89,22 +89,7 @@ struct SessionRow: View {
             }
         }
         .contextMenu {
-            let targetDesc = SessionJumper.shared.describeTarget(for: session)
-            Button {
-                if session.state == .completed {
-                    withAnimation(.smooth) {
-                        viewModel.markAsRead(id: session.id)
-                    }
-                }
-                SessionJumper.shared.jump(to: session)
-            } label: {
-                VStack(alignment: .leading, spacing: 2) {
-                    Label("跳转到会话", systemImage: "arrow.up.forward.square")
-                    if let desc = targetDesc, !desc.isEmpty {
-                        Text(desc)
-                    }
-                }
-            }
+            SessionJumpMenuItem(session: session, viewModel: viewModel)
 
             Button {
                 withAnimation(.smooth) {
@@ -263,6 +248,33 @@ struct SessionRow: View {
 
         case .idle:
             EmptyView()
+        }
+    }
+}
+
+private struct SessionJumpMenuItem: View {
+    let session: AgentSession
+    @ObservedObject var viewModel: MonitorViewModel
+    @LocalState private var targetDescription: String? = nil
+
+    var body: some View {
+        Button {
+            if session.state == .completed {
+                withAnimation(.smooth) {
+                    viewModel.markAsRead(id: session.id)
+                }
+            }
+            SessionJumper.shared.jump(to: session)
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Label("跳转到会话", systemImage: "arrow.up.forward.square")
+                if let desc = targetDescription, !desc.isEmpty {
+                    Text(desc)
+                }
+            }
+        }
+        .task {
+            targetDescription = await SessionJumper.shared.describeTarget(for: session)
         }
     }
 }

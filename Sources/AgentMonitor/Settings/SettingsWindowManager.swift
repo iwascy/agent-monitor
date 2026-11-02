@@ -15,9 +15,15 @@ public final class SettingsWindowManager: ObservableObject {
     public static let shared = SettingsWindowManager()
 
     @Published public var selectedTab: SettingsTab = .general
-    public var openSettingsAction: (() -> Void)?
+    private var openSettingsAction: (() -> Void)?
+    private var hasPendingRequest = false
+    private let activateApp: () -> Void
 
-    private init() {
+    init(activateApp: @escaping () -> Void = {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+    }) {
+        self.activateApp = activateApp
         if let tabEnv = ProcessInfo.processInfo.environment["AGENT_MONITOR_SETTINGS_TAB"]?.lowercased() {
             switch tabEnv {
             case "general": selectedTab = .general
@@ -35,14 +41,19 @@ public final class SettingsWindowManager: ObservableObject {
         if let tab = tab {
             selectedTab = tab
         }
-        NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
-        if let action = openSettingsAction {
-            action()
-        } else if #available(macOS 14.0, *) {
-            NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-        } else {
-            NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
-        }
+        hasPendingRequest = true
+        openPendingSettings()
+    }
+
+    public func installOpenSettingsAction(_ action: @escaping () -> Void) {
+        openSettingsAction = action
+        openPendingSettings()
+    }
+
+    private func openPendingSettings() {
+        guard hasPendingRequest, let action = openSettingsAction else { return }
+        hasPendingRequest = false
+        activateApp()
+        action()
     }
 }

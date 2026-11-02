@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 public enum SessionTransition: Sendable, Equatable {
     case added(AgentSession)
@@ -97,6 +98,17 @@ public final class SessionStore: @unchecked Sendable {
 
     public var onTransition: (@Sendable (SessionTransition) -> Void)?
     public var onSessionsUpdated: (@Sendable ([AgentSession]) -> Void)?
+    private let sessionSubject = CurrentValueSubject<[AgentSession], Never>([])
+
+    /// 独立订阅者共享扫描结果，不替换现有回调；包含面板中隐藏的会话。
+    public var sessionsPublisher: AnyPublisher<[AgentSession], Never> {
+        sessionSubject.eraseToAnyPublisher()
+    }
+
+    private func publishSessions(_ sessions: [AgentSession]) {
+        sessionSubject.send(sessions)
+        onSessionsUpdated?(sessions)
+    }
 
     private var fileWatcher: FileWatcher?
     private var pollingTimer: DispatchSourceTimer?
@@ -166,7 +178,7 @@ public final class SessionStore: @unchecked Sendable {
         if visible {
             refresh()
             let updated = currentSessions
-            onSessionsUpdated?(updated)
+            publishSessions(updated)
             startLiveTimer()
         } else {
             stopLiveTimer()
@@ -232,7 +244,7 @@ public final class SessionStore: @unchecked Sendable {
             session.state = .idle
             sessionCache[id] = session
             let updated = currentSessions
-            onSessionsUpdated?(updated)
+            publishSessions(updated)
         }
     }
 
@@ -249,7 +261,7 @@ public final class SessionStore: @unchecked Sendable {
             }
         }
         let updated = currentSessions
-        onSessionsUpdated?(updated)
+        publishSessions(updated)
     }
 
     public func refreshAsync() {
@@ -388,7 +400,7 @@ public final class SessionStore: @unchecked Sendable {
 
         if !transitions.isEmpty || removedFromDisabled {
             let updated = currentSessions
-            onSessionsUpdated?(updated)
+            publishSessions(updated)
             if !isInitial {
                 for t in transitions {
                     if suppressAdded {
@@ -401,7 +413,7 @@ public final class SessionStore: @unchecked Sendable {
             }
         } else if isInitial || (isVisible && hasContentChanges) {
             let updated = currentSessions
-            onSessionsUpdated?(updated)
+            publishSessions(updated)
         }
 
         return transitions

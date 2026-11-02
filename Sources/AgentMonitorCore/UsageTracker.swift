@@ -236,9 +236,8 @@ public final class UsageTracker: @unchecked Sendable {
         if let lastSize = state.lastFileSize,
            let lastMtime = state.lastModified,
            lastSize == currentSize,
-           lastMtime == mtime,
-           let cached = state.lastUsage {
-            return cached
+           lastMtime == mtime {
+            return state.lastUsage
         }
 
         // 读取尾部 64KB

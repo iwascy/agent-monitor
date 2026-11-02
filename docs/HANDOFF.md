@@ -452,8 +452,8 @@ Initial transitions generated: 3 (suppressed from notifications)
 
 ### 8.6 F6 Token 用量追踪
 1. **增量去重统计 (`UsageTracker`)**：
-   - Claude Code：按 `message.id` 严格去重，排除 sidechain，1MB 流式分块与偏移量增量缓存。
-   - Codex：读取 rollout `.jsonl` 尾部 64KB，提取 `token_count`、`model_context_window` 与模型名。
+   - Claude Code：按 `message.id` 严格去重，sidechain 计入累计但不覆盖当前上下文和模型名；1MB 流式分块与偏移量增量缓存。
+   - Codex：读取 rollout `.jsonl` 尾部 64KB 提取 `token_count` 与 `model_context_window`，模型名缺失时逆向分块查找；文件大小和 mtime 未变时复用缓存，包括暂无用量的结果。
    - Antigravity：读取 SQLite 中的 `step_count` 作为步数。
 2. **格式化与视觉标签 (`UsageFormatter` & `UsageChip`)**：
    - 严格实现 short / long 数值缩写与百分比计算。
@@ -468,10 +468,21 @@ Initial transitions generated: 3 (suppressed from notifications)
    - 在 `MonitorViewModel.handleKeyEvent` 中，当收到 `Escape` 键时按两级处理：若当前存在筛选条件（`filterState != nil`），优先清空筛选状态并重置键盘高亮项；若当前未开启任何筛选，直接调用 `MenuBarExtraToggler.toggle()` 收起面板窗口。
 3. **设置窗口打开与页面直达 (P0-3 实测)**：
    - 彻底废弃在 macOS 14 上被静默忽略的私有 selector `showSettingsWindow:`。
-   - 齿轮菜单首项采用 SwiftUI 原生 `SettingsLink` 打开设置窗口；面板快捷键 `⌘,` 与通知唤醒场景下，通过从根视图层注入的 `@Environment(\.openSettings)` 闭包由 `SettingsWindowManager` 单例触发，并结合 `SettingsTab` 枚举绑定，实现通知中心点击权限告警时一键直达「集成」设置页。
+   - 齿轮菜单首项采用 SwiftUI 原生 `SettingsLink` 打开设置窗口；面板快捷键 `⌘,` 与通知唤醒场景下，由启动时就出现的菜单栏标签注入 `@Environment(\.openSettings)` 闭包，再由 `SettingsWindowManager` 单例触发。注入前收到的请求会排队，结合 `SettingsTab` 枚举绑定，点击权限告警后直达「集成」设置页。
 4. **提示音配置与分发结论 (P2-11 实测)**：
    - 实测证实：macOS 的 `UNUserNotificationCenter` 守护进程要求音频资源必须驻留在当前 App Bundle 的 `Resources` 或用户的 `~/Library/Sounds` 目录下，直接通过 `UNNotificationSound(named:)` 引用系统目录 `/System/Library/Sounds/<name>.aiff` 会因权限与沙盒边界被系统忽略。因此应用内部试听使用 `NSSound(named: name)` 原生发声（试听「默认」与「无」时不播放 Ping），而在派发系统通知时安全使用 `UNNotificationSound.default` 作为可靠回退。
 5. **单元测试与打包验证指标**：
    - **单元测试覆盖**：项目内共计 78 项测试用例（覆盖 P0-4 安全安装与符号链接、P0-2 提醒抑制状态推进、P1-2 异步 AppleScript 竞速、P1-19 逆向流式扫描、P1-20 累计统计、P2-2 根路径匹配等全部新增/修改逻辑），全部通过（0 报错、0 失败）。
    - **打包与签名验证**：通过 `./scripts/build-app.sh` 顺利完成 release 模式编译、AppIcon 组装、代码签名与 LaunchServices 注册（产物位于 `build/AgentMonitor.app`）。通过 `swift run probe` 成功完成本机 14 个真实会话（涵盖 Claude Code、Codex、Antigravity）的数据扫描与用量提取。
+
+### 8.8 v2 二次 review 修复（2026-11-02）
+
+- Hooks：配置和备份复制原文件权限、ACL，写入同目录临时文件后 `rename`；新建配置为 `0600`。原有空事件数组、空 hooks 条目在卸载和修复中保留；没有本应用条目时不改写配置。
+- 跳转：AppleScript 用独立后台任务执行，主 actor 上的单次 continuation 与超时竞争，超时无需等待脚本结束，迟到的 `-1743` 仍记录。右键菜单出现时异步计算跳转描述，进程解析与 AX 读取在后台执行，结果缓存 5 秒。
+- 设置与快捷键：设置打开动作从菜单栏标签注册，保留冷启动请求；重新注册快捷键前先释放两个旧组合键，支持冲突解除及互换。
+- Agent 页：通过 `SessionStore.sessionsPublisher` 接收完整会话列表，新增、移除和禁用 agent 后更新计数，不覆盖主面板回调。
+- 提示音与用量：不可直接引用的系统命名音效明确回退到默认音；尚无 `token_count` 的 Codex 文件也缓存空结果，文件变化后重新读取。
+- 回归测试：新增配置/备份权限、空 hooks 保留、真实超时与迟到拒绝、后台描述与缓存、冷启动设置、热键冲突及互换、会话订阅和空用量缓存用例。全套 91 项测试通过。
+- 构建与扫描：`./scripts/build-app.sh` 完成 release 打包及签名；`swift run probe` 扫描并聚合 12 个真实会话（Codex 9 个、Antigravity 3 个），无扫描错误。
+- UI 验证限制：当前终端未获辅助功能权限，`panel-probe` 无法读取 AX 树；不将单元测试通过视为窗口置前、菜单描述显示或键盘交互的人工验收。
 
