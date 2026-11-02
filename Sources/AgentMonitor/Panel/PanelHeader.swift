@@ -38,6 +38,10 @@ struct PanelHeader: View {
 
                     // Settings Menu
                     Menu {
+                        Button("设置…") {
+                            SettingsWindowManager.shared.openSettings()
+                        }
+                        .keyboardShortcut(",", modifiers: .command)
                         Toggle("开机启动", isOn: Binding(
                             get: { viewModel.isLaunchAtLogin },
                             set: { viewModel.setLaunchAtLogin($0) }

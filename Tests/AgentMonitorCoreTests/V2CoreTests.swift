@@ -112,6 +112,159 @@ struct V2CoreTests {
         // SPEC requirement: remove without notifying
         #expect(collector.list.isEmpty)
     }
+
+    @Test("NotificationPolicy table-driven test")
+    func testNotificationPolicy() {
+        struct TestCase {
+            let name: String
+            let session: AgentSession
+            let transition: SessionTransition
+            let settings: NotificationPolicy.SettingsSnapshot
+            let muteRules: [MuteRule]
+            let isPanelVisible: Bool
+            let isNotificationsPaused: Bool
+            let expected: Bool
+        }
+
+        let defaultWaiting = AgentSession(id: "s1", kind: .claudeCode, title: "T1", cwd: "/code/app", state: .waitingForUser)
+        let defaultCompleted = AgentSession(id: "s2", kind: .claudeCode, title: "T2", cwd: "/code/app", state: .completed, completedDuration: 15)
+        let shortCompleted = AgentSession(id: "s3", kind: .claudeCode, title: "T3", cwd: "/code/app", state: .completed, completedDuration: 5)
+
+        let cases: [TestCase] = [
+            TestCase(
+                name: "Normal waiting notifies",
+                session: defaultWaiting,
+                transition: .stateChanged(session: defaultWaiting, from: .running, to: .waitingForUser),
+                settings: .init(),
+                muteRules: [],
+                isPanelVisible: false,
+                isNotificationsPaused: false,
+                expected: true
+            ),
+            TestCase(
+                name: "Normal completed notifies when duration >= minRunSeconds",
+                session: defaultCompleted,
+                transition: .stateChanged(session: defaultCompleted, from: .running, to: .completed),
+                settings: .init(minRunSecondsForCompletion: 10),
+                muteRules: [],
+                isPanelVisible: false,
+                isNotificationsPaused: false,
+                expected: true
+            ),
+            TestCase(
+                name: "Completed skipped when duration < minRunSeconds",
+                session: shortCompleted,
+                transition: .stateChanged(session: shortCompleted, from: .running, to: .completed),
+                settings: .init(minRunSecondsForCompletion: 10),
+                muteRules: [],
+                isPanelVisible: false,
+                isNotificationsPaused: false,
+                expected: false
+            ),
+            TestCase(
+                name: "Completed notified when minRunSeconds is 0",
+                session: shortCompleted,
+                transition: .stateChanged(session: shortCompleted, from: .running, to: .completed),
+                settings: .init(minRunSecondsForCompletion: 0),
+                muteRules: [],
+                isPanelVisible: false,
+                isNotificationsPaused: false,
+                expected: true
+            ),
+            TestCase(
+                name: "Notifications paused suppresses all",
+                session: defaultWaiting,
+                transition: .stateChanged(session: defaultWaiting, from: .running, to: .waitingForUser),
+                settings: .init(),
+                muteRules: [],
+                isPanelVisible: false,
+                isNotificationsPaused: true,
+                expected: false
+            ),
+            TestCase(
+                name: "Panel open suppresses when silenceWhilePanelOpen is true",
+                session: defaultWaiting,
+                transition: .stateChanged(session: defaultWaiting, from: .running, to: .waitingForUser),
+                settings: .init(silenceWhilePanelOpen: true),
+                muteRules: [],
+                isPanelVisible: true,
+                isNotificationsPaused: false,
+                expected: false
+            ),
+            TestCase(
+                name: "Panel open notifies when silenceWhilePanelOpen is false",
+                session: defaultWaiting,
+                transition: .stateChanged(session: defaultWaiting, from: .running, to: .waitingForUser),
+                settings: .init(silenceWhilePanelOpen: false),
+                muteRules: [],
+                isPanelVisible: true,
+                isNotificationsPaused: false,
+                expected: true
+            ),
+            TestCase(
+                name: "Mute all suppresses waiting and completed",
+                session: defaultWaiting,
+                transition: .stateChanged(session: defaultWaiting, from: .running, to: .waitingForUser),
+                settings: .init(),
+                muteRules: [MuteRule(path: "/code/app", scope: .all)],
+                isPanelVisible: false,
+                isNotificationsPaused: false,
+                expected: false
+            ),
+            TestCase(
+                name: "Mute completedOnly allows waiting",
+                session: defaultWaiting,
+                transition: .stateChanged(session: defaultWaiting, from: .running, to: .waitingForUser),
+                settings: .init(),
+                muteRules: [MuteRule(path: "/code/app", scope: .completedOnly)],
+                isPanelVisible: false,
+                isNotificationsPaused: false,
+                expected: true
+            ),
+            TestCase(
+                name: "Mute completedOnly suppresses completed",
+                session: defaultCompleted,
+                transition: .stateChanged(session: defaultCompleted, from: .running, to: .completed),
+                settings: .init(),
+                muteRules: [MuteRule(path: "/code/app", scope: .completedOnly)],
+                isPanelVisible: false,
+                isNotificationsPaused: false,
+                expected: false
+            ),
+            TestCase(
+                name: "notifyWaiting disabled suppresses waiting",
+                session: defaultWaiting,
+                transition: .stateChanged(session: defaultWaiting, from: .running, to: .waitingForUser),
+                settings: .init(notifyWaiting: false),
+                muteRules: [],
+                isPanelVisible: false,
+                isNotificationsPaused: false,
+                expected: false
+            ),
+            TestCase(
+                name: "notifyCompleted disabled suppresses completed",
+                session: defaultCompleted,
+                transition: .stateChanged(session: defaultCompleted, from: .running, to: .completed),
+                settings: .init(notifyCompleted: false),
+                muteRules: [],
+                isPanelVisible: false,
+                isNotificationsPaused: false,
+                expected: false
+            )
+        ]
+
+        for tc in cases {
+            let actual = NotificationPolicy.shouldNotify(
+                session: tc.session,
+                transition: tc.transition,
+                settings: tc.settings,
+                muteRules: tc.muteRules,
+                isPanelVisible: tc.isPanelVisible,
+                isNotificationsPaused: tc.isNotificationsPaused
+            )
+            #expect(actual == tc.expected, "Failed test case: \(tc.name)")
+        }
+    }
 }
 
 private final class MockAdapter: AgentAdapter, @unchecked Sendable {

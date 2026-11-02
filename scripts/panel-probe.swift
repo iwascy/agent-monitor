@@ -21,7 +21,8 @@ import AppKit
 import ApplicationServices
 import Foundation
 
-let appBinary = "/Users/cy/code/agent-monitor/build/AgentMonitor.app/Contents/MacOS/AgentMonitor"
+let projectRoot = FileManager.default.currentDirectoryPath
+let appBinary = "\(projectRoot)/build/AgentMonitor.app/Contents/MacOS/AgentMonitor"
 
 func runBash(_ cmd: String) -> String {
     let task = Process()
@@ -119,10 +120,19 @@ let app = AXUIElementCreateApplication(proc.processIdentifier)
 func cleanup() {
     proc.terminate()
     _ = runBash("pkill -9 -x AgentMonitor || true")
-    if wasRunning { _ = runBash("open /Users/cy/code/agent-monitor/build/AgentMonitor.app") }
+    if wasRunning { _ = runBash("open '\(projectRoot)/build/AgentMonitor.app'") }
 }
 
-guard let extrasBar = attr(app, "AXExtrasMenuBar"), let statusItem = children(extrasBar as! AXUIElement).first else {
+var statusItem: AXUIElement?
+for _ in 0..<20 {
+    if let extrasBar = attr(app, "AXExtrasMenuBar"), let item = children(extrasBar as! AXUIElement).first {
+        statusItem = item
+        break
+    }
+    Thread.sleep(forTimeInterval: 0.2)
+}
+
+guard let statusItem = statusItem else {
     print("error: status item not found")
     cleanup()
     exit(1)
@@ -133,10 +143,15 @@ for type in [CGEventType.leftMouseDown, .leftMouseUp] {
     CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: itemCenter, mouseButton: .left)?.post(tap: .cghidEventTap)
     Thread.sleep(forTimeInterval: 0.1)
 }
-Thread.sleep(forTimeInterval: 1.0)
 
 func panelWindow() -> AXUIElement? {
-    (attr(app, kAXWindowsAttribute) as? [AXUIElement])?.first { frame($0).height > 40 }
+    for _ in 0..<15 {
+        if let win = (attr(app, kAXWindowsAttribute) as? [AXUIElement])?.first(where: { frame($0).height > 40 }) {
+            return win
+        }
+        Thread.sleep(forTimeInterval: 0.2)
+    }
+    return nil
 }
 
 func report(step: Int, title: String) {

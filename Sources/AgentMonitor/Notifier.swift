@@ -77,19 +77,49 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
-    public func notify(transition: SessionTransition) {
-        guard !isPaused else { return }
+    public static func notificationSound(name: String) -> UNNotificationSound? {
+        if name == "default" {
+            return .default
+        } else if name == "none" {
+            return nil
+        } else {
+            return UNNotificationSound(named: UNNotificationSoundName("\(name).aiff"))
+        }
+    }
+
+    public func notify(transition: SessionTransition, isPanelVisible: Bool = false) {
+        let settings = AppSettings.shared
+        let snapshot = NotificationPolicy.SettingsSnapshot(
+            notifyWaiting: settings.notifyWaiting,
+            notifyCompleted: settings.notifyCompleted,
+            minRunSecondsForCompletion: settings.minRunSecondsForCompletion,
+            silenceWhilePanelOpen: settings.silenceWhilePanelOpen
+        )
+
+        let session: AgentSession
+        switch transition {
+        case .added(let s), .stateChanged(let s, _, _):
+            session = s
+        case .removed:
+            return
+        }
+
+        guard NotificationPolicy.shouldNotify(
+            session: session,
+            transition: transition,
+            settings: snapshot,
+            muteRules: settings.muteRules,
+            isPanelVisible: isPanelVisible,
+            isNotificationsPaused: isPaused
+        ) else {
+            return
+        }
 
         switch transition {
-        case .added(let session):
-            // .added only notifies if state is waitingForUser (avoids false alerts on new/idle sessions)
-            if session.state == .waitingForUser {
-                sendNotification(for: session, previousState: nil)
-            }
-        case .stateChanged(let session, let fromState, let toState):
-            if toState == .waitingForUser || toState == .completed {
-                sendNotification(for: session, previousState: fromState)
-            }
+        case .added(let s):
+            sendNotification(for: s, previousState: nil)
+        case .stateChanged(let s, let fromState, _):
+            sendNotification(for: s, previousState: fromState)
         case .removed:
             break
         }
@@ -112,7 +142,8 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         content.subtitle = NotificationFormatter.formatSubtitle(for: session)
         content.body = NotificationFormatter.formatBody(for: session)
         content.threadIdentifier = session.id
-        content.sound = UNNotificationSound.default
+        let soundName = session.state == .waitingForUser ? AppSettings.shared.waitingSound : AppSettings.shared.completedSound
+        content.sound = Self.notificationSound(name: soundName)
         content.userInfo = [
             "sessionId": session.id,
             "kind": session.kind.rawValue,

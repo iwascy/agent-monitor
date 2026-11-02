@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import Combine
 import ServiceManagement
 import AgentMonitorCore
 
@@ -40,9 +41,10 @@ public final class MonitorViewModel: ObservableObject {
         }
     }
 
-    private let sessionStore: SessionStore
+    public let sessionStore: SessionStore
     private let notifier = Notifier.shared
     private var pauseExpiryTimer: DispatchSourceTimer?
+    private var cancellables = Set<AnyCancellable>()
 
     public var highestState: SessionState? {
         if sessions.contains(where: { $0.state == .waitingForUser }) {
@@ -117,6 +119,25 @@ public final class MonitorViewModel: ObservableObject {
             return
         }
 
+        sessionStore.maxAgeSeconds = TimeInterval(AppSettings.shared.activityWindowHours * 3600)
+        sessionStore.disabledKinds = AppSettings.shared.disabledAgents
+
+        AppSettings.shared.$activityWindowHours
+            .dropFirst()
+            .sink { [weak self] hours in
+                self?.sessionStore.maxAgeSeconds = TimeInterval(hours * 3600)
+                self?.sessionStore.refresh()
+            }
+            .store(in: &cancellables)
+
+        AppSettings.shared.$disabledAgents
+            .dropFirst()
+            .sink { [weak self] disabled in
+                self?.sessionStore.disabledKinds = disabled
+                self?.sessionStore.refresh()
+            }
+            .store(in: &cancellables)
+
         sessionStore.onSessionsUpdated = { [weak self] updated in
             Task { @MainActor in
                 guard let self = self else { return }
@@ -129,7 +150,8 @@ public final class MonitorViewModel: ObservableObject {
 
         sessionStore.onTransition = { [weak self] transition in
             Task { @MainActor in
-                self?.notifier.notify(transition: transition)
+                guard let self = self else { return }
+                self.notifier.notify(transition: transition, isPanelVisible: self.sessionStore.isPanelVisible)
             }
         }
 
@@ -357,6 +379,9 @@ public final class MonitorViewModel: ObservableObject {
 
     public func onPanelAppear() {
         sessionStore.isPanelVisible = true
+        if ProcessInfo.processInfo.environment["AGENT_MONITOR_IDLE_EXPANDED"] == nil {
+            isIdleExpanded = AppSettings.shared.idleExpandedByDefault
+        }
     }
 
     public func onPanelDisappear() {

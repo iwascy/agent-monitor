@@ -22,5 +22,9 @@ struct AgentMonitorApp: App {
             MenuBarLabelView(viewModel: viewModel)
         }
         .menuBarExtraStyle(.window)
+
+        Settings {
+            SettingsView(sessionStore: viewModel.sessionStore)
+        }
     }
 }

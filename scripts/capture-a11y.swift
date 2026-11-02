@@ -33,10 +33,12 @@ func killAgentMonitor() {
     Thread.sleep(forTimeInterval: 0.5)
 }
 
+let projectRoot = FileManager.default.currentDirectoryPath
+
 func launchApp(env: [String: String]) -> Process {
     killAgentMonitor()
     let task = Process()
-    task.executableURL = URL(fileURLWithPath: "/Users/cy/code/agent-monitor/build/AgentMonitor.app/Contents/MacOS/AgentMonitor")
+    task.executableURL = URL(fileURLWithPath: "\(projectRoot)/build/AgentMonitor.app/Contents/MacOS/AgentMonitor")
     var processEnv = ProcessInfo.processInfo.environment
     for (k, v) in env {
         processEnv[k] = v
@@ -120,7 +122,7 @@ func setCheckbox(name: String, target: Bool) {
 }
 
 let fm = FileManager.default
-let destDir = "/Users/cy/code/agent-monitor/docs/screenshots/a11y"
+let destDir = "\(projectRoot)/docs/screenshots/a11y"
 try? fm.createDirectory(atPath: destDir, withIntermediateDirectories: true)
 
 print("==> Starting accessibility screenshot captures...")
@@ -220,7 +222,7 @@ closeSystemSettings()
 setDarkMode(originalDarkMode)
 
 if wasAgentMonitorRunning {
-    _ = runBash("open /Users/cy/code/agent-monitor/build/AgentMonitor.app")
+    _ = runBash("open '\(projectRoot)/build/AgentMonitor.app'")
 }
 
 if !restored {

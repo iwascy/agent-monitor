@@ -38,10 +38,12 @@ func killAgentMonitor() {
     Thread.sleep(forTimeInterval: 0.5)
 }
 
+let projectRoot = FileManager.default.currentDirectoryPath
+
 func launchApp(env: [String: String]) -> Process {
     killAgentMonitor()
     let task = Process()
-    task.executableURL = URL(fileURLWithPath: "/Users/cy/code/agent-monitor/build/AgentMonitor.app/Contents/MacOS/AgentMonitor")
+    task.executableURL = URL(fileURLWithPath: "\(projectRoot)/build/AgentMonitor.app/Contents/MacOS/AgentMonitor")
     var processEnv = ProcessInfo.processInfo.environment
     for (k, v) in env {
         processEnv[k] = v
@@ -85,7 +87,7 @@ func clickAt(point: CGPoint) {
 }
 
 let fm = FileManager.default
-let destDir = "/Users/cy/code/agent-monitor/docs/screenshots"
+let destDir = "\(projectRoot)/docs/screenshots"
 try? fm.createDirectory(atPath: destDir, withIntermediateDirectories: true)
 
 print("==> Starting automated screenshot captures...")
@@ -197,6 +199,6 @@ for isDark in [false, true] {
 // Restore the user's original appearance and running app
 setDarkMode(originalDarkMode)
 if wasAgentMonitorRunning {
-    _ = runBash("open /Users/cy/code/agent-monitor/build/AgentMonitor.app")
+    _ = runBash("open '\(projectRoot)/build/AgentMonitor.app'")
 }
 print("==> All menu bar and panel captures completed.")
