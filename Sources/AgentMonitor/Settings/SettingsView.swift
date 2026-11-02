@@ -31,7 +31,7 @@ public struct SettingsView: View {
                     Label("静音", systemImage: "bell.slash")
                 }
 
-            IntegrationSettingsView()
+            IntegrationSettingsView(sessionStore: sessionStore)
                 .tabItem {
                     Label("集成", systemImage: "powerplug")
                 }
