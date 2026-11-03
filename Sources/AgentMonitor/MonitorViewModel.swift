@@ -25,29 +25,61 @@ public final class MonitorViewModel: ObservableObject {
     @Published public var keyboardSelectionID: String? = nil
     @Published public var hasOverdue: Bool = false
 
-    /// Returns the sessions currently visible in the panel in visual display order.
-    public var visibleSessions: [AgentSession] {
-        var result: [AgentSession] = []
-        let waiting = sessions.filter { $0.state == .waitingForUser }
-        let done = sessions.filter { $0.state == .completed }
-        let running = sessions.filter { $0.state == .running }
-        let idle = sessions.filter { $0.state == .idle }
+    @Published public private(set) var expandedSubagentIDs: Set<String> = []
 
-        if filterState == nil || filterState == .waitingForUser {
-            result.append(contentsOf: waiting)
+    // Ignore broken/cyclic links so malformed metadata cannot hide sessions or recurse forever.
+    private func parentID(of session: AgentSession) -> String? {
+        let byID = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0) })
+        var visited: Set<String> = [session.id]
+        var parent = session.parentSessionID
+        while let id = parent, let ancestor = byID[id] {
+            guard visited.insert(id).inserted else { return nil }
+            parent = ancestor.parentSessionID
         }
-        if filterState == nil || filterState == .completed {
-            result.append(contentsOf: done)
-        }
-        if filterState == nil || filterState == .running {
-            result.append(contentsOf: running)
-        }
-        if filterState == nil || filterState == .idle {
-            if isIdleExpanded || filterState == .idle {
-                result.append(contentsOf: idle)
+        return session.parentSessionID.flatMap { byID[$0] == nil ? nil : $0 }
+    }
+
+    public var rootSessions: [AgentSession] {
+        sessions.filter { parentID(of: $0) == nil }
+    }
+
+    public func childSessions(of id: String) -> [AgentSession] {
+        sessions.filter { parentID(of: $0) == id }
+    }
+
+    public func subtree(of session: AgentSession, expandedOnly: Bool = true) -> [AgentSession] {
+        guard !expandedOnly || expandedSubagentIDs.contains(session.id) else { return [session] }
+        return [session] + childSessions(of: session.id).flatMap { subtree(of: $0, expandedOnly: expandedOnly) }
+    }
+
+    public func roots(in state: SessionState) -> [AgentSession] {
+        rootSessions.filter { root in
+            if filterState == state {
+                return subtree(of: root, expandedOnly: false).contains { $0.state == state }
             }
+            return root.state == state
         }
-        return result
+    }
+
+    public func depth(of session: AgentSession) -> Int {
+        guard let id = parentID(of: session), let parent = sessions.first(where: { $0.id == id }) else { return 0 }
+        return 1 + depth(of: parent)
+    }
+
+    public func toggleSubagents(of id: String) {
+        if !expandedSubagentIDs.insert(id).inserted { expandedSubagentIDs.remove(id) }
+        if let selected = keyboardSelectionID, !visibleSessionIDs.contains(selected) {
+            keyboardSelectionID = nil
+        }
+    }
+
+    /// Keyboard navigation uses the same expanded hierarchy and order as the panel.
+    public var visibleSessions: [AgentSession] {
+        [.waitingForUser, .completed, .running, .idle].flatMap { (state: SessionState) -> [AgentSession] in
+            guard filterState == nil || filterState == state else { return [] }
+            guard state != .idle || isIdleExpanded || filterState == .idle else { return [] }
+            return roots(in: state).flatMap { subtree(of: $0) }
+        }
     }
 
     /// Returns the session IDs currently visible in the panel.
@@ -198,6 +230,8 @@ public final class MonitorViewModel: ObservableObject {
                 self.rawSessions = []
             } else if mock.lowercased() == "large" {
                 self.rawSessions = MonitorViewModel.mockSessionsLarge()
+            } else if mock.lowercased() == "subagents" {
+                self.rawSessions = MonitorViewModel.mockSubagentSessions()
             } else {
                 self.rawSessions = MonitorViewModel.mockSessions()
             }
@@ -329,6 +363,16 @@ public final class MonitorViewModel: ObservableObject {
                 notifier.sendReminder(for: session, index: index)
             }
         }
+    }
+
+    public static func mockSubagentSessions() -> [AgentSession] {
+        [
+            AgentSession(id: "ag:parent", kind: .antigravity, title: "主会话：整理监控面板", state: .running),
+            AgentSession(id: "ag:child-1", kind: .antigravity, title: "界面检查", state: .running, parentSessionID: "ag:parent"),
+            AgentSession(id: "ag:child-2", kind: .antigravity, title: "采集检查", state: .completed, parentSessionID: "ag:parent"),
+            AgentSession(id: "ag:child-3", kind: .antigravity, title: "已结束的子代理", state: .idle, suppressCompletion: true, parentSessionID: "ag:parent"),
+            AgentSession(id: "ag:grandchild", kind: .antigravity, title: "布局检查", state: .running, parentSessionID: "ag:child-1")
+        ]
     }
 
     public static func mockSessions() -> [AgentSession] {
@@ -614,6 +658,7 @@ public final class MonitorViewModel: ObservableObject {
     }
 
     public func onPanelAppear() {
+        expandedSubagentIDs = []
         sessionStore.isPanelVisible = true
         if ProcessInfo.processInfo.environment["AGENT_MONITOR_IDLE_EXPANDED"] == nil {
             isIdleExpanded = AppSettings.shared.idleExpandedByDefault

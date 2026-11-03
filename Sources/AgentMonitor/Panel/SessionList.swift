@@ -30,12 +30,11 @@ struct SessionList: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 6) {
-                    let visibleIDs = Set(viewModel.visibleSessionIDs)
-                    let waitingSessions = viewModel.sessions.filter { $0.state == .waitingForUser && visibleIDs.contains($0.id) }
-                    let doneSessions = viewModel.sessions.filter { $0.state == .completed && visibleIDs.contains($0.id) }
-                    let runningSessions = viewModel.sessions.filter { $0.state == .running && visibleIDs.contains($0.id) }
-                    let idleSessions = viewModel.sessions.filter { $0.state == .idle && visibleIDs.contains($0.id) }
-                    let allIdleSessions = viewModel.sessions.filter { $0.state == .idle }
+                    let waitingSessions = viewModel.roots(in: .waitingForUser)
+                    let doneSessions = viewModel.roots(in: .completed)
+                    let runningSessions = viewModel.roots(in: .running)
+                    let idleSessions = viewModel.roots(in: .idle)
+                    let allIdleSessions = idleSessions
 
                     if viewModel.filterState == nil || viewModel.filterState == .waitingForUser {
                         if !waitingSessions.isEmpty {
@@ -44,7 +43,7 @@ struct SessionList: View {
                             let overdueText: Text? = overdueCount > 0 ? Text("· \(overdueCount) 个已超时").foregroundColor(.red) : nil
                             sectionHeader(title: "等你回复", dotColor: .orange, trailing: overdueText)
                             ForEach(waitingSessions) { session in
-                                SessionRow(session: session, viewModel: viewModel)
+                                SessionGroup(session: session, viewModel: viewModel)
                                     .id(session.id)
                             }
                         }
@@ -54,7 +53,7 @@ struct SessionList: View {
                         if !doneSessions.isEmpty {
                             sectionHeader(title: "已完成", dotColor: .green)
                             ForEach(doneSessions) { session in
-                                SessionRow(session: session, viewModel: viewModel)
+                                SessionGroup(session: session, viewModel: viewModel)
                                     .id(session.id)
                             }
                         }
@@ -64,7 +63,7 @@ struct SessionList: View {
                         if !runningSessions.isEmpty {
                             sectionHeader(title: "运行中", dotColor: .blue)
                             ForEach(runningSessions) { session in
-                                SessionRow(session: session, viewModel: viewModel)
+                                SessionGroup(session: session, viewModel: viewModel)
                                     .id(session.id)
                             }
                         }
@@ -100,7 +99,7 @@ struct SessionList: View {
 
                             if isExpanded {
                                 ForEach(idleSessions) { session in
-                                    SessionRow(session: session, viewModel: viewModel)
+                                    SessionGroup(session: session, viewModel: viewModel)
                                         .id(session.id)
                                 }
                                 .transition(.asymmetric(insertion: .opacity, removal: .identity))
@@ -232,6 +231,43 @@ struct SessionList: View {
             }
         }
         .padding(EdgeInsets(top: 6, leading: 8, bottom: 0, trailing: 8))
+    }
+}
+
+/// Each row keeps its own jump button; disclosure is a separate accessible control.
+private struct SessionGroup: View {
+    let session: AgentSession
+    @ObservedObject var viewModel: MonitorViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(viewModel.subtree(of: session)) { row in
+                VStack(alignment: .leading, spacing: 0) {
+                    SessionRow(session: row, viewModel: viewModel)
+                        .id(row.id)
+                    let count = viewModel.childSessions(of: row.id).count
+                    if count > 0 {
+                        let expanded = viewModel.expandedSubagentIDs.contains(row.id)
+                        Button {
+                            viewModel.toggleSubagents(of: row.id)
+                        } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                                Text("子代理 · \(count) 个")
+                            }
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 5)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("子代理 · \(count) 个")
+                        .accessibilityValue(expanded ? "已展开" : "已折叠")
+                    }
+                }
+                .padding(.leading, CGFloat(min(viewModel.depth(of: row), 3)) * 14)
+            }
+        }
     }
 }
 

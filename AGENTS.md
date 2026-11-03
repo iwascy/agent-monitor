@@ -24,7 +24,7 @@ swift scripts/panel-probe.swift --mock large --idle-expanded --shots <dir> 全�
 - 怀疑布局问题时，在视图里临时加 `onGeometryChange` 往 stderr 打日志，`panel-probe` 会把 app 的输出一起打印出来。查完删掉。
 - 脚本会结束正在运行的 AgentMonitor，跑完如原来在运行会重新打开；需要终端有「辅助功能」权限（`--shots` 还需「屏幕录制」）。
 
-模拟数据环境变量（只在 mock 下生效，不影响正常运行）：`AGENT_MONITOR_MOCK_DATA=1|large|empty`、`AGENT_MONITOR_FILTER=waiting|completed|running|idle`、`AGENT_MONITOR_IDLE_EXPANDED=1`、`AGENT_MONITOR_COLOR_SCHEME=light|dark`。
+模拟数据环境变量（只在 mock 下生效，不影响正常运行）：`AGENT_MONITOR_MOCK_DATA=1|large|empty|subagents`、`AGENT_MONITOR_FILTER=waiting|completed|running|idle`、`AGENT_MONITOR_IDLE_EXPANDED=1`、`AGENT_MONITOR_COLOR_SCHEME=light|dark`。`subagents` 提供主会话、三个子代理和一个二级子代理，用 `子代理 · 3 个` / `子代理 · 1 个` 按钮验证折叠和展开。
 
 整套文档截图用 `scripts/capture-all.swift` 和 `scripts/capture-a11y.swift`（会切换系统深浅色）。
 

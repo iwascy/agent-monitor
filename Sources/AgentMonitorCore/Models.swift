@@ -59,6 +59,7 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
     public var transcriptPath: String?  // 会话记录文件，F6 增量读取用
     public var originator: String?      // Codex session_meta.originator，例如 "Codex Desktop"、"codex_cli_rs"
     public var usage: SessionUsage?     // F6
+    public var parentSessionID: String? // 与 id 相同的带 agent 前缀的父会话 ID
 
     public init(
         id: String,
@@ -77,7 +78,8 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
         pid: Int32? = nil,
         transcriptPath: String? = nil,
         originator: String? = nil,
-        usage: SessionUsage? = nil
+        usage: SessionUsage? = nil,
+        parentSessionID: String? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -96,6 +98,7 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
         self.transcriptPath = transcriptPath
         self.originator = originator
         self.usage = usage
+        self.parentSessionID = parentSessionID
     }
 }
 

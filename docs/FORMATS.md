@@ -136,6 +136,13 @@
 - `CASCADE_RUN_STATUS_RUNNING` 且无提问：判定为 **`running`**。
 - `CASCADE_RUN_STATUS_IDLE`：Adapter 报告 **`idle`**（由 SessionStore 负责升级为 completed）。
 
+### 5.3 子代理归属
+
+- 读取摘要库 `parent_conversation_id`，转换为带 `antigravity:` 前缀的 `AgentSession.parentSessionID`；兼容缺少此列或 `agent_name` 的旧版数据库。
+- 子代理按父链嵌套在主会话下，每次打开面板默认折叠；展开后才加入键盘导航顺序。按状态筛选命中子代理时保留主会话作为分组入口。
+- 有近期子代理的旧父会话在 Adapter 和 SessionStore 中均保留，活动时间保持原值。缺失父记录的会话独立显示；循环关系降级为独立会话。
+- `killed` 子代理保留为 idle，并设置 `suppressCompletion`，不把终止误报为成功完成；无父会话的 killed 记录仍忽略。空标题优先使用 agent_name（排除通用名 self），其次使用 worktree 角色名或短 ID。
+
 ---
 
 ## 6. 启发式与未验证状态汇总说明

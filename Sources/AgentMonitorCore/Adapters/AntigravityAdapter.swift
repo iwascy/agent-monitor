@@ -58,19 +58,24 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
         let rows = try readSummaries(dbURL: summariesDBURL)
         var results: [AgentSession] = []
 
-        for row in rows {
-            if row.killed {
-                continue
+        let rowsByID = Dictionary(uniqueKeysWithValues: rows.map { ($0.conversationId, $0) })
+        // Keep ancestors of recent children, even if the parent itself has not written recently.
+        var includedIDs = Set<String>()
+        for row in rows where !row.killed || !row.parentConversationID.isEmpty {
+            guard let modified = row.lastModified else { continue }
+            let lockPath = presenceDir.appendingPathComponent("\(row.conversationId).lock").path
+            guard now.timeIntervalSince(modified) <= maxAgeSeconds || isLockHeld(lockPath) else { continue }
+            var current: SummaryRow? = row
+            var visited = Set<String>()
+            while let ancestor = current, visited.insert(ancestor.conversationId).inserted {
+                includedIDs.insert(ancestor.conversationId)
+                current = rowsByID[ancestor.parentConversationID]
             }
+        }
+
+        for row in rows where includedIDs.contains(row.conversationId) {
 
             guard let lastModified = row.lastModified else {
-                continue
-            }
-
-            let lockPath = presenceDir.appendingPathComponent("\(row.conversationId).lock").path
-            let isLocked = isLockHeld(lockPath)
-
-            if !isLocked && now.timeIntervalSince(lastModified) > maxAgeSeconds {
                 continue
             }
 
@@ -86,7 +91,21 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
                 }
             }
 
-            let title = !row.title.isEmpty ? row.title : (resolvedCwd.map { ($0 as NSString).lastPathComponent } ?? "Antigravity")
+            var fallbackTitle = resolvedCwd.map { ($0 as NSString).lastPathComponent } ?? "Antigravity"
+            if !row.parentConversationID.isEmpty {
+                if !row.agentName.isEmpty && row.agentName != "self" {
+                    fallbackTitle = row.agentName
+                } else if fallbackTitle.hasPrefix("subagent-") {
+                    fallbackTitle = String(fallbackTitle.dropFirst("subagent-".count))
+                    if let suffix = fallbackTitle.range(of: "-self-", options: .backwards) {
+                        fallbackTitle = String(fallbackTitle[..<suffix.lowerBound])
+                    }
+                    fallbackTitle = fallbackTitle.replacingOccurrences(of: "-", with: " ")
+                } else {
+                    fallbackTitle = "子代理 · \(row.conversationId.prefix(8))"
+                }
+            }
+            let title = !row.title.isEmpty ? row.title : fallbackTitle
 
             // Check transcript for waiting states and response details
             let transcriptURL = brainDir.appendingPathComponent(row.conversationId).appendingPathComponent(".system_generated/logs/transcript.jsonl")
@@ -96,7 +115,7 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
             var waitingLabel: String? = nil
             var detail: String? = nil
 
-            if row.status == "CASCADE_RUN_STATUS_RUNNING" || row.notFullyIdle {
+            if !row.killed && (row.status == "CASCADE_RUN_STATUS_RUNNING" || row.notFullyIdle) {
                 if transcriptInfo.isWaiting {
                     state = .waitingForUser
                     waitingLabel = "在问你"
@@ -127,7 +146,9 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
                 detail: detail,
                 detailIsCommand: false,
                 waitingLabel: waitingLabel,
-                usage: showUsage ? SessionUsage(steps: row.stepCount, updatedAt: lastModified) : nil
+                suppressCompletion: row.killed,
+                usage: showUsage ? SessionUsage(steps: row.stepCount, updatedAt: lastModified) : nil,
+                parentSessionID: row.parentConversationID.isEmpty ? nil : "\(kind.rawValue):\(row.parentConversationID)"
             )
             results.append(session)
         }
@@ -145,6 +166,8 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
         let killed: Bool
         let lastModified: Date?
         let stepCount: Int
+        let parentConversationID: String
+        let agentName: String
     }
 
     public struct DatabaseError: Error, CustomStringConvertible {
@@ -185,26 +208,28 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
     }
 
     private func readSummaries(dbURL: URL) throws -> [SummaryRow] {
-        let (database, _) = try openAndPrepare(dbURL: dbURL, query: "SELECT 1")
+        let (database, probe) = try openAndPrepare(dbURL: dbURL, query: "SELECT 1")
+        sqlite3_finalize(probe)
         defer {
             sqlite3_close(database)
         }
 
-        var hasStepCount = false
+        var columns = Set<String>()
         var pragmaStmt: OpaquePointer?
         if sqlite3_prepare_v2(database, "PRAGMA table_info(conversation_summaries)", -1, &pragmaStmt, nil) == SQLITE_OK, let pStmt = pragmaStmt {
             while sqlite3_step(pStmt) == SQLITE_ROW {
-                if let nameCol = sqlite3_column_text(pStmt, 1), String(cString: nameCol) == "step_count" {
-                    hasStepCount = true
-                    break
+                if let nameCol = sqlite3_column_text(pStmt, 1) {
+                    columns.insert(String(cString: nameCol))
                 }
             }
             sqlite3_finalize(pStmt)
         }
 
-        let stepExpr = hasStepCount ? "step_count" : "0 AS step_count"
+        let stepExpr = columns.contains("step_count") ? "step_count" : "0 AS step_count"
+        let parentExpr = columns.contains("parent_conversation_id") ? "parent_conversation_id" : "''"
+        let nameExpr = columns.contains("agent_name") ? "agent_name" : "''"
         let query = """
-        SELECT conversation_id, title, preview, workspace_uris, status, not_fully_idle, killed, last_modified_time, \(stepExpr)
+        SELECT conversation_id, title, preview, workspace_uris, status, not_fully_idle, killed, last_modified_time, \(stepExpr), \(parentExpr), \(nameExpr)
         FROM conversation_summaries
         ORDER BY last_modified_time DESC
         """
@@ -269,7 +294,9 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
                 notFullyIdle: notIdle,
                 killed: killed,
                 lastModified: modDate,
-                stepCount: stepCount
+                stepCount: stepCount,
+                parentConversationID: sqlite3_column_text(statement, 9).map { String(cString: $0) } ?? "",
+                agentName: sqlite3_column_text(statement, 10).map { String(cString: $0) } ?? ""
             ))
         }
         guard rc == SQLITE_DONE else {

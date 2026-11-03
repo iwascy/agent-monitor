@@ -68,6 +68,9 @@ for adapter in adapters {
         for (idx, s) in sessions.enumerated() {
             print("  [\(idx + 1)] ID: \(s.id)")
             print("      Title: \(s.title)")
+            if let parent = s.parentSessionID {
+                print("      Parent ID: \(parent)")
+            }
             print("      CWD: \(s.cwd ?? "<none>")")
             print("      State (raw): \(s.state.rawValue)")
             if let label = s.waitingLabel {
@@ -100,6 +103,9 @@ print("Initial transitions generated: \(transitions.count) (suppressed from noti
 for (idx, s) in storeSessions.enumerated() {
     print("  [\(idx + 1)] [\(s.kind.shortCode)] \(s.title)")
     print("      ID: \(s.id)")
+    if let parent = s.parentSessionID {
+        print("      Parent ID: \(parent)")
+    }
     print("      State: \(s.state.rawValue)")
     print("      Detail: \(s.detail ?? "<none>")")
     print("      Last Activity: \(s.lastActivity)")

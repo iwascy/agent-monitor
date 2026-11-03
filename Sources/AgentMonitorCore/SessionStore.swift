@@ -302,6 +302,15 @@ public final class SessionStore: @unchecked Sendable {
         var hasContentChanges = false
         var removedFromDisabled = false
         let now = Date()
+        var retainedAncestors = Set<String>()
+        for session in scannedSessions.values where now.timeIntervalSince(session.lastActivity) <= currentMaxAge {
+            var parentID = session.parentSessionID
+            var visited: Set<String> = [session.id]
+            while let id = parentID, let parent = scannedSessions[id], visited.insert(id).inserted {
+                retainedAncestors.insert(id)
+                parentID = parent.parentSessionID
+            }
+        }
 
         // 0. Remove sessions from disabled adapters (without notifying)
         for (id, existing) in sessionCache {
@@ -320,7 +329,7 @@ public final class SessionStore: @unchecked Sendable {
             }
 
             if let fresh = scannedSessions[id] {
-                if now.timeIntervalSince(fresh.lastActivity) > currentMaxAge {
+                if now.timeIntervalSince(fresh.lastActivity) > currentMaxAge && !retainedAncestors.contains(id) {
                     sessionCache.removeValue(forKey: id)
                     transitions.append(.removed(id: id))
                     hasContentChanges = true
@@ -334,7 +343,7 @@ public final class SessionStore: @unchecked Sendable {
 
         // 2. Detect added or modified sessions
         for (id, var fresh) in scannedSessions {
-            if now.timeIntervalSince(fresh.lastActivity) > currentMaxAge {
+            if now.timeIntervalSince(fresh.lastActivity) > currentMaxAge && !retainedAncestors.contains(id) {
                 continue
             }
 
