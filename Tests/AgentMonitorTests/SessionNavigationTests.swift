@@ -8,6 +8,17 @@ struct SessionNavigationTests {
     private let uuid = "01a188df-cf09-7763-8796-5609ef455ca1"
     private let other = "68660d06-0ce7-42f3-b8a1-7b17a91fbae4"
 
+    @Test("Paseo uses the exact host and agent, including remote provider ID collisions")
+    func paseoHostRoute() {
+        let resolver = SessionNavigationResolver(home: URL(fileURLWithPath: "/nonexistent"))
+        let origin = PaseoOrigin(serverID: "server with/slash", agentID: other, hostName: "remote", isLocal: false,
+                                 provider: "codex", nativeSessionID: uuid, connected: false)
+        let target = resolver.resolve(.init(kind: .paseo, sessionID: "paseo:server:\(other)", paseo: origin))
+        #expect(target == .deepLink(URL(string: "paseo://h/server%20with%2Fslash/agent/\(other)")!, bundleID: "sh.paseo.desktop"))
+        var invalid = origin; invalid.agentID = "../../new?prompt=hello"
+        #expect(invalid.deepLink == nil)
+    }
+
     @Test("Codex routes to the native chat ID")
     func codexRoute() {
         let resolver = SessionNavigationResolver(home: URL(fileURLWithPath: "/nonexistent"))

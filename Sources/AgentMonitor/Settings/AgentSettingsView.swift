@@ -18,6 +18,8 @@ struct AgentSettingsView: View {
         }
         let home = fm.homeDirectoryForCurrentUser
         switch kind {
+        case .paseo:
+            return fm.fileExists(atPath: home.appendingPathComponent(".paseo").path)
         case .claudeCode:
             return fm.fileExists(atPath: home.appendingPathComponent(".claude").path)
         case .codex:
@@ -50,6 +52,7 @@ struct AgentSettingsView: View {
         }
 
         switch kind {
+        case .paseo: return "~/.paseo"
         case .claudeCode: return "~/.claude"
         case .codex: return "~/.codex"
         case .dsh: return "~/.dsh"

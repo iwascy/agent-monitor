@@ -56,7 +56,10 @@ func formatUsageLine(_ u: SessionUsage) -> String {
     return parts.joined(separator: ", ")
 }
 
-let adapters: [AgentAdapter] = [claude, codex, dsh, antigravity]
+let paseo = PaseoAdapter()
+// Explicit, synchronous read for this diagnostic tool; the menu bar uses cached background reads.
+paseo.refreshNow()
+let adapters: [AgentAdapter] = [claude, codex, dsh, antigravity, paseo]
 
 for adapter in adapters {
     print("----------------------------------------")
@@ -70,6 +73,9 @@ for adapter in adapters {
             print("      Title: \(s.title)")
             if let parent = s.parentSessionID {
                 print("      Parent ID: \(parent)")
+            }
+            if let origin = s.paseo {
+                print("      Paseo: \(origin.locationLabel) / \(origin.provider) / \(origin.connected ? "connected" : "offline")")
             }
             print("      CWD: \(s.cwd ?? "<none>")")
             print("      State (raw): \(s.state.rawValue)")

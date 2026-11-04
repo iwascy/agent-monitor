@@ -85,7 +85,7 @@ final class SessionNavigator {
         case .claudeCode: path = "/Applications/Claude.app"
         case .codex: path = "/Applications/ChatGPT.app"
         case .antigravity: path = "/Applications/Antigravity.app"
-        case .dsh: path = "/Applications/Paseo.app"
+        case .dsh, .paseo: path = "/Applications/Paseo.app"
         }
         return FileManager.default.fileExists(atPath: path) ? URL(fileURLWithPath: path) : nil
     }

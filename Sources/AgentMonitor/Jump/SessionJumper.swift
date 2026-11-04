@@ -105,6 +105,8 @@ public final class SessionJumper {
             } else {
                 return .app(bundleId: Self.firstRunningTerminalBundleId())
             }
+        case .paseo:
+            return .app(bundleId: "sh.paseo.desktop")
         case .dsh:
             return .app(bundleId: Self.firstRunningTerminalBundleId())
         case .antigravity:
@@ -114,7 +116,11 @@ public final class SessionJumper {
 
     public func jump(to session: AgentSession, onSuccess: (@MainActor () -> Void)? = nil) {
         let request = SessionNavigationRequest(kind: session.kind, sessionID: session.id,
-                                               entrypoint: session.entrypoint, cwd: session.cwd)
+                                               entrypoint: session.entrypoint, cwd: session.cwd, paseo: session.paseo)
+        if session.paseo != nil {
+            SessionNavigator.shared.open(request, onSuccess: onSuccess)
+            return
+        }
         let isCodexCLI = session.kind == .codex && session.originator != nil
             && !(session.originator?.contains("Desktop") ?? false)
         // Desktop sessions must keep their exact conversation link even when
@@ -163,6 +169,7 @@ public final class SessionJumper {
     }
 
     nonisolated private static func computeDescribeTarget(for session: AgentSession) -> String? {
+        if let origin = session.paseo { return "Paseo · \(origin.locationLabel)" }
         let tgt = resolveTarget(for: session)
         switch tgt {
         case .terminal(let host, let windowHint):
@@ -200,6 +207,7 @@ public final class SessionJumper {
             case .codex: return "Codex"
             case .dsh: return "DeepSeek Harness"
             case .antigravity: return "Antigravity"
+            case .paseo: return "Paseo"
             }
         }
     }

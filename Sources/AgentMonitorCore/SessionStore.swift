@@ -298,6 +298,8 @@ public final class SessionStore: @unchecked Sendable {
             }
         }
 
+        scannedSessions = Dictionary(uniqueKeysWithValues: PaseoAdapter.merging(Array(scannedSessions.values)).map { ($0.id, $0) })
+
         var transitions: [SessionTransition] = []
         var hasContentChanges = false
         var removedFromDisabled = false
@@ -361,7 +363,7 @@ public final class SessionStore: @unchecked Sendable {
                             fresh.completedDuration = duration
                             runningStartTimes.removeValue(forKey: id)
                         }
-                    } else if existing.state == .completed {
+                    } else if existing.state == .completed && !fresh.suppressCompletion {
                         // Maintain completed state until marked as read
                         if !readCompletedKeys.contains(readKey) {
                             fresh.state = .completed

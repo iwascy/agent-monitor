@@ -47,6 +47,8 @@ mkdir -p "$RESOURCES_DIR"
 
 cp "$BIN_PATH" "$MACOS_DIR/AgentMonitor"
 chmod +x "$MACOS_DIR/AgentMonitor"
+# SwiftPM resource bundle used by the read-only Paseo bridge.
+cp -R "$(dirname "$BIN_PATH")/AgentMonitor_AgentMonitorCore.bundle" "$RESOURCES_DIR/"
 
 echo "==> Generating AppIcon.icns..."
 ICONSET_DIR="$PACKAGE_DIR/AppIcon.iconset"

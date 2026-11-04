@@ -12,6 +12,7 @@ public enum AgentKind: String, Codable, Sendable, CaseIterable {
     case codex = "codex"
     case dsh = "dsh"
     case antigravity = "antigravity"
+    case paseo = "paseo"
 
     public var displayName: String {
         switch self {
@@ -19,6 +20,7 @@ public enum AgentKind: String, Codable, Sendable, CaseIterable {
         case .codex: return "Codex"
         case .dsh: return "DeepSeek Harness"
         case .antigravity: return "Antigravity"
+        case .paseo: return "Paseo"
         }
     }
 
@@ -28,6 +30,7 @@ public enum AgentKind: String, Codable, Sendable, CaseIterable {
         case .codex: return "CX"
         case .dsh: return "DS"
         case .antigravity: return "AG"
+        case .paseo: return "PS"
         }
     }
 
@@ -37,6 +40,7 @@ public enum AgentKind: String, Codable, Sendable, CaseIterable {
         case .codex: return "com.openai.codex"
         case .dsh: return "com.deepseek.dsh"
         case .antigravity: return "com.google.antigravity"
+        case .paseo: return "sh.paseo.desktop"
         }
     }
 }
@@ -62,6 +66,7 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
     public var parentSessionID: String? // 与 id 相同的带 agent 前缀的父会话 ID
     public var parentId: String?        // 父会话的完整 id，即 "dsh:<parentSession>"；主会话为 nil
     public var subagentDepth: Int       // 0 = 主会话
+    public var paseo: PaseoOrigin?
     public var subagents: [AgentSession] // 仅用于显示的嵌套结果，SessionStore 内部始终为空
 
     public init(
@@ -85,8 +90,10 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
         parentSessionID: String? = nil,
         parentId: String? = nil,
         subagentDepth: Int = 0,
-        subagents: [AgentSession] = []
+        subagents: [AgentSession] = [],
+        paseo: PaseoOrigin? = nil
     ) {
+        self.paseo = paseo
         self.id = id
         self.kind = kind
         self.title = title

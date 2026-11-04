@@ -11,7 +11,7 @@ struct AgentMonitorApp: App {
         let codexAdapter = CodexAdapter()
         let dshAdapter = DshAdapter()
         let antigravityAdapter = AntigravityAdapter()
-        let store = SessionStore(adapters: [claudeAdapter, codexAdapter, dshAdapter, antigravityAdapter])
+        let store = SessionStore(adapters: [claudeAdapter, codexAdapter, dshAdapter, antigravityAdapter, PaseoAdapter()])
         _viewModel = StateObject(wrappedValue: MonitorViewModel(sessionStore: store))
     }
 

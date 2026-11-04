@@ -42,7 +42,7 @@ struct SessionRow: View {
                             ? (cwdPart.isEmpty ? "\(session.kind.displayName) · 子代理" : "\(session.kind.displayName) · 子代理 · \(cwdPart)")
                             : (cwdPart.isEmpty ? session.kind.displayName : "\(session.kind.displayName) · \(cwdPart)")
                         HStack(spacing: 4) {
-                            Text(sub)
+                            Text(session.paseo.map { $0.displayLabel + (cwdPart.isEmpty ? "" : " · \(cwdPart)") } ?? sub)
                                 .font(.system(size: 11))
                                 .foregroundColor(.secondary)
                                 .lineLimit(1)
@@ -119,7 +119,7 @@ struct SessionRow: View {
             } label: {
                 Label("在访达中显示目录", systemImage: "folder")
             }
-            .disabled(!hasCwd)
+            .disabled(!hasCwd || session.paseo?.isLocal == false)
 
             Button {
                 if hasCwd {

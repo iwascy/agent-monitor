@@ -6,6 +6,7 @@ struct SessionNavigationRequest: Sendable {
     let sessionID: String?
     var entrypoint: String? = nil
     var cwd: String? = nil
+    var paseo: PaseoOrigin? = nil
 
     var nativeID: String? {
         guard let sessionID, sessionID.hasPrefix("\(kind.rawValue):") else { return nil }
@@ -30,8 +31,14 @@ struct SessionNavigationResolver: Sendable {
     var home: URL = FileManager.default.homeDirectoryForCurrentUser
 
     func resolve(_ request: SessionNavigationRequest) -> SessionNavigationTarget {
+        if let origin = request.paseo {
+            guard let link = origin.deepLink else { return .unavailable("Paseo 会话地址无效。") }
+            return .deepLink(link, bundleID: "sh.paseo.desktop")
+        }
         guard let id = request.nativeID else { return .unavailable("会话 ID 缺失或格式无效。") }
         switch request.kind {
+        case .paseo:
+            return .unavailable("缺少 Paseo 主机和会话信息。")
         case .codex:
             return .deepLink(URL(string: "codex://threads/\(id)")!, bundleID: "com.openai.codex")
         case .antigravity:

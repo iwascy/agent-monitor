@@ -1,6 +1,6 @@
 # Agent Monitor
 
-macOS 原生菜单栏常驻应用，用于实时汇总并监控本机所有 AI Agent 会话（**Claude Code**、**Codex**、**DeepSeek Harness (dsh)**、**Antigravity**）的运行状态。
+macOS 原生菜单栏常驻应用，用于实时汇总并监控本机所有 AI Agent 会话（**Claude Code**、**Codex**、**DeepSeek Harness (dsh)**、**Antigravity**、**Paseo**）的运行状态。
 
 在多 Agent 并行执行编程任务时，帮助你第一时间获知：
 - **等你回复 (waitingForUser)**：哪些会话正在等待命令执行授权或等待用户输入。
@@ -13,8 +13,10 @@ macOS 原生菜单栏常驻应用，用于实时汇总并监控本机所有 AI A
 ## 核心原则
 
 1. **绝对只读**：严禁向任何 Agent 数据目录写入、修改或删除文件。SQLite 数据库统一以 `?mode=ro&immutable=0` 及只读标记打开；锁探测仅使用只读描述符非阻塞 `flock(fd, LOCK_EX | LOCK_NB)`，探测后立即释放。
-2. **零凭据接触**：代码严格不读取、不打印、不泄露任何凭据文件（如 `~/.dsh/.credentials.yaml`、`~/.dsh/.env`、`~/.codex/auth.json`、`~/.gemini/*oauth*` 等）。
-3. **数据不出本机**：零网络请求，会话元数据全部在本地内存与文件系统处理。
+2. **不读取 Agent 凭据文件**：代码严格不读取、不打印、不泄露任何凭据文件（如 `~/.dsh/.credentials.yaml`、`~/.dsh/.env`、`~/.codex/auth.json`、`~/.gemini/*oauth*` 等）。
+3. **连接范围明确**：原生 Agent 扫描保持本地只读；Paseo 只读取本机桌面端已保存主机的 Paseo 会话，经其 SDK 连接本机或远程 daemon，不扫描远程原生 Agent 历史，不维护额外 SSH 清单。元数据不发送到分析或第三方存储服务。
+   Paseo 复用桌面端连接注册表中的连接信息（包含已保存的 daemon 密码，如有），仅在桥接进程内用于握手，不输出到日志或返回给面板；不读取 `.paseo/local-credential`、daemon 密钥或 provider 凭据文件。
+
 4. **极低资源开销**：基于 macOS `FSEventStream` 文件变化去抖（~300ms）监听，辅以低频（15s）兜底轮询，空闲时 CPU 占用 < 0.1%。
 
 ---
@@ -59,7 +61,7 @@ macOS 原生菜单栏常驻应用，用于实时汇总并监控本机所有 AI A
 ```bash
 swift test
 ```
-*执行 8 个集成与单元测试，覆盖 4 种 Agent 的 running / waitingForUser / completed 状态判断及 SessionStore 排序与已读迁移。*
+覆盖各 Agent 状态判断、SessionStore 已读迁移，以及 Paseo 本地去重、远程身份和断线处理。Paseo 桥接测试：`node --test scripts/test-paseo-bridge.cjs`。
 
 ### 2. 编译并打包 App
 ```bash
@@ -122,3 +124,13 @@ open build/AgentMonitor.app
 2. **Codex 进程粒度关联**：Codex 的 rollout 文件中未记录单进程 PID。活跃判定采用文件 mtime 窗口结合全局 `codex` 进程存在性探测。
 3. **DSH 锁异常残留容错**：如果 dsh 被 `kill -9` 强制终止，内核会自动释放 `session.lock` 上的文件锁，AgentMonitor 的非阻塞 flock 探测能准确感知锁已解除，自动将其归入 completed 或 idle。
 4. **Antigravity WAL 模式**：通过只读 URI 参数 `?mode=ro&immutable=0`，使 SQLite 在只读挂载下依然能够感知 WAL 共享内存更新，并结合 300ms busy_timeout 防止并发访问冲突。
+
+
+## Paseo 会话
+
+- 汇总本机 Paseo 管理的会话，运行位置可以是本机或桌面端保存的远程连接；支持 TCP/TLS、Unix socket、SSH、Relay 和经已保存主机路由的连接。
+- 列表标明 Paseo、底层 provider、运行主机及离线状态；点击按 `serverId + agentId` 跳转原会话。远程目录不会交给本机访达打开。
+- 本机会话通过 provider 原生 session ID 与现有扫描结果去重，保留 token 用量。远程同 ID 不与本机会话合并。隐藏已归档和内部会话；沿用设置中的活动时间窗口。
+- 查询在后台执行，最多每 5 秒启动一次，通常随 15 秒轮询更新；打开面板时会更快刷新。单次桥接限时 12 秒，失败保留本次运行中已见过的会话并标为离线，不触发完成通知。重启后尚未连上的远程主机没有可恢复的会话缓存。
+- 依赖已安装的 `/Applications/Paseo.app` 自带 Electron/SDK，无需额外安装 Node。连接注册表按 Chromium LevelDB manifest、WAL、SSTable 和 Snappy 格式只读解析，不打开数据库锁、不写入 Paseo 目录。已核对 Paseo SDK 0.13.2；不兼容升级或需要额外认证时显示离线。
+- UI 验证：`swift scripts/panel-probe.swift --mock paseo --tree`。真实只读诊断：`swift run probe --hours 24`。

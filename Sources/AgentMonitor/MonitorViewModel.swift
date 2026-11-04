@@ -235,6 +235,9 @@ public final class MonitorViewModel: ObservableObject {
                 self.rawSessions = [AgentSession(id: sessionID, kind: kind, title: "会话跳转验证", state: .idle,
                                               entrypoint: env["AGENT_MONITOR_NAVIGATION_ENTRYPOINT"])]
                 self.isIdleExpanded = true
+            } else if mock.lowercased() == "paseo" {
+                self.rawSessions = MonitorViewModel.mockPaseoSessions()
+                self.isIdleExpanded = true
             } else if mock.lowercased() == "empty" {
                 self.rawSessions = []
             } else if mock.lowercased() == "subagents" {
@@ -705,6 +708,29 @@ public final class MonitorViewModel: ObservableObject {
         ]
         list.append(contentsOf: extra)
         return list
+    }
+
+    static func mockPaseoSessions() -> [AgentSession] {
+        let now = Date()
+        return [
+            AgentSession(id: "paseo:local:68660d06-0ce7-42f3-b8a1-7b17a91fbae4", kind: .paseo,
+                         title: "本机 Paseo 会话", cwd: "/Users/cy/code/agent-monitor", state: .running,
+                         stateSince: now.addingTimeInterval(-30), lastActivity: now,
+                         paseo: PaseoOrigin(serverID: "local", agentID: "68660d06-0ce7-42f3-b8a1-7b17a91fbae4",
+                                             hostName: "Mac", isLocal: true, provider: "codex")),
+            AgentSession(id: "paseo:remote:01a188df-cf09-7763-8796-5609ef455ca1", kind: .paseo,
+                         title: "远程 Paseo 会话", cwd: "/srv/backend", state: .waitingForUser,
+                         stateSince: now.addingTimeInterval(-60), lastActivity: now,
+                         detail: "等待 Paseo 授权或回复", waitingLabel: "等待授权或回复",
+                         paseo: PaseoOrigin(serverID: "remote", agentID: "01a188df-cf09-7763-8796-5609ef455ca1",
+                                             hostName: "开发服务器", isLocal: false, provider: "claude")),
+            AgentSession(id: "paseo:offline:bf7c14ea-f041-4ac1-98a0-0e90d03e0af6", kind: .paseo,
+                         title: "离线 Paseo 会话", cwd: "/srv/work", state: .idle,
+                         stateSince: now.addingTimeInterval(-120), lastActivity: now,
+                         detail: "连接断开 · 状态待同步", suppressCompletion: true,
+                         paseo: PaseoOrigin(serverID: "offline", agentID: "bf7c14ea-f041-4ac1-98a0-0e90d03e0af6",
+                                             hostName: "备用服务器", isLocal: false, provider: "dsh-pi", connected: false))
+        ]
     }
 
     public func updateSessionsManually(_ sessions: [AgentSession]) {

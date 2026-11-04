@@ -25,7 +25,8 @@ let package = Package(
         .target(
             name: "AgentMonitorCore",
             dependencies: [],
-            path: "Sources/AgentMonitorCore"
+            path: "Sources/AgentMonitorCore",
+            resources: [.copy("Resources/PaseoBridge.cjs")]
         ),
         .executableTarget(
             name: "AgentMonitor",

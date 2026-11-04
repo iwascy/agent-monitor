@@ -106,6 +106,10 @@ public final class IconManager {
                 return ws.icon(forFile: appURL.path)
             }
 
+        case .paseo:
+            if FileManager.default.fileExists(atPath: "/Applications/Paseo.app") {
+                return ws.icon(forFile: "/Applications/Paseo.app")
+            }
         case .dsh:
             if let dshIcon = loadDshIcon() {
                 return dshIcon
@@ -183,6 +187,8 @@ public final class IconManager {
             bgColor = NSColor(red: 0.06, green: 0.65, blue: 0.52, alpha: 1.0) // OpenAI green
         case .dsh:
             bgColor = NSColor(red: 0.30, green: 0.42, blue: 1.00, alpha: 1.0) // DeepSeek blue
+        case .paseo:
+            bgColor = .systemPurple
         case .antigravity:
             bgColor = NSColor(red: 0.26, green: 0.52, blue: 0.96, alpha: 1.0) // Google blue
         }
