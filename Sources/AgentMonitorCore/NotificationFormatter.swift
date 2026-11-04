@@ -15,8 +15,12 @@ public struct NotificationFormatter {
         return text
     }
 
-    public static func formatTitle(for session: AgentSession) -> String {
+    public static func formatTitle(for session: AgentSession, parentTitle: String? = nil) -> String {
         let cleaned = cleanTitle(session.title, maxLength: 40)
+        if let parent = parentTitle {
+            let parentCleaned = cleanTitle(parent, maxLength: 40)
+            return "\(session.kind.displayName) · \(parentCleaned) › \(cleaned)"
+        }
         return "\(session.kind.displayName) · \(cleaned)"
     }
 

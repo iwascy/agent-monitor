@@ -486,3 +486,66 @@ Initial transitions generated: 3 (suppressed from notifications)
 - 构建与扫描：`./scripts/build-app.sh` 完成 release 打包及签名；`swift run probe` 扫描并聚合 12 个真实会话（Codex 9 个、Antigravity 3 个），无扫描错误。
 - UI 验证限制：当前终端未获辅助功能权限，`panel-probe` 无法读取 AX 树；不将单元测试通过视为窗口置前、菜单描述显示或键盘交互的人工验收。
 
+
+## 会话跳转
+
+面板行和通知点击统一调用 `SessionNavigator`，成功后才标为已读。快速连续点击时保留最后一次请求，避免异步跳转丢失。失败会显示具体原因，不再把激活应用当作已定位会话。
+
+- **Codex**：`codex://threads/<UUID>`，显式发送给 `com.openai.codex`，兼容旧 `com.openai.chat`。路由已从本机 ChatGPT.app 的 URL 处理代码确认。
+- **Claude 桌面**：只读 `~/Library/Application Support/Claude/claude-code-sessions/`，以 `cliSessionId` 精确匹配监控 UUID，再用 `claude://code/continue?session=local_<UUID>` 选择现有桌面会话。跳过归档记录，多个不同内部 ID 匹配时拒绝猜测。`entrypoint=cli` 不走桌面导入。
+- **DSH / Paseo**：只读 `~/.paseo/agents/` 的 `runtimeInfo.sessionId` 插件数据，以 `data.dshSessionId` 匹配，结合 `.paseo/server-id` 生成 `paseo://h/<serverId>/agent/<agentId>`。不按标题或目录匹配。
+- **Antigravity**：没有通用的会话深链接；本机 Electron 主进程会自动开启并写出 `~/Library/Application Support/Antigravity/DevToolsActivePort`。只连接这个现有的 loopback 端点，筛选唯一 Hub 主页面，通过 CDP `Page.navigate` 跳转同源 `/c/<UUID>`，再核对页面 URL。不会开启调试开关或修改 Antigravity 设置。多窗口/接口不可用时回退到辅助功能树中的精确会话 URL 链接；该回退需要 Agent Monitor 的辅助功能权限。接口随上游版本变化时明确报错。
+- **Claude CLI / DSH 终端**：分别由 Claude 元数据 PID、DSH 会话锁文件的持有 PID 找到进程，沿父进程链定位真实终端和 TTY。Terminal / iTerm2 用 AppleScript 按 TTY 选择原窗口、标签和分屏；需要自动化权限，打包脚本已加入用途说明。Warp 原生支持 `warp://session/<uuid>` 路由协议（继承环境变量 `WARP_TERMINAL_SESSION_UUID` 或 `WARP_FOCUS_URL`），无需开启额外的 Scripting 开关或自动化权限即可直接聚焦原会话标签；若使用自定义环境亦可回退至 `--warpctrl`。无 TTY、已退出、tmux 脱离的进程或其他终端暂不自动恢复；不启动第二个 agent，也不写入终端输入。
+
+验证：新增路由、映射、歧义、进程归属、命令参数边界和超时测试；全量 `swift test` 通过。可用 `AGENT_MONITOR_LOCAL_NAVIGATION_TEST=1 swift test --filter SessionNavigationTests` 额外只读核对本机 Claude 映射。用户授予 ChatGPT 辅助功能权限后，`AXIsProcessTrusted` 已返回 true。实机面板为 384×700；修复 `panel-probe` 的启动等待（最多 8 秒等 AX 状态项），新增 `row:<精确标题>`、`--navigation-session <kind:nativeID>` 和可选 `--navigation-entrypoint`，用于不发送消息的现有会话验证。导航 fixture 仅在 mock 模式下生效，不写 agent 元数据。
+
+本机面板点击结果：
+- Claude「右边滑条不协调」成功打开，AX 页面 URL 为 `/epitaxy/local_78b14c88-fc89-41ed-a553-5ee82db5763d`，与 CLI ID 映射一致。
+- Antigravity「Background Refresh Control Settings」成功从原会话切换到 `/c/5d8202e7-4825-4b2b-8a38-0aae518ddf32`。实测主页面为 HTTPS，已修正只接收 HTTP 的遗漏并补回归测试。
+- DSH 通过 384×183 的单行 fixture 打开现有历史会话，Paseo 窗口标题与正文均为「DSH 连接测试」，未发送新消息。
+- Codex 已从面板发出指定会话的点击；电脑控制工具禁止读取 Codex 自身窗口，最终选择未独立确认。Warp 同样受该工具限制；当前没有活跃 CLI 会话可供终端端到端验证。不能把单元测试视为这些路径的实机验证。
+
+接口参考：[Chrome DevTools Page 协议](https://chromedevtools.github.io/devtools-protocol/tot/Page/)、[Warp Control CLI 设计](https://github.com/warpdotdev/warp/blob/master/specs/warp-control-cli/TECH.md)。Claude / Paseo 路由和本地字段已核对本机安装包实现及元数据。
+
+---
+
+## 通知图标修复
+
+- **根因**：
+  1. `scripts/build-app.sh` 中生成的 `Info.plist` 将 `CFBundleIconFile` 设为 `AppIcon`（缺少 `.icns` 扩展名），且在非 Xcode 环境下未编译 Asset Catalog。现代 macOS（Tahoe 26 / Sequoia）的 `iconservicesagent` 无法匹配无扩展名的 icns，将应用图标标记为缺失并缓存系统默认网格占位图（wireframe placeholder）。
+  2. 当系统通知触发时，横幅左侧应用标识图标渲染为网格占位图；右侧虽然挂载了正确的 Agent 图标附件（`UNNotificationAttachment`），但左侧显眼的占位方块让用户直观感觉弹窗图标损坏缺失。
+  3. 若系统中同时存在 `/Applications/AgentMonitor.app` 与 `build/AgentMonitor.app`，LaunchServices 容易因版本不一致优先读取旧应用配置。
+- **修复**：
+  1. `scripts/build-app.sh`：将 `CFBundleIconFile` 规范修正为 `AppIcon.icns`，避免 `iconservicesagent` 查找 asset catalog 失败。
+  2. 打包后同步更新并重新注册 `/Applications/AgentMonitor.app`（若存在且可写），确保 LaunchServices 始终持有最新应用元数据与图标。
+  3. 清除失效的 `iconservicesagent` 进程缓存，通知横幅左侧顺利渲染出清晰的 Agent Monitor 应用圆角深色图标，右侧保持对应的 Agent 鲜明缩略图。
+  4. 重新截取并更新 `docs/screenshots/notification-completed.png` 与 `docs/screenshots/notification-waiting.png`，替换旧文档中残留的网格图。
+
+---
+
+## 子代理识别与嵌套显示 (Subagents & Tree Nesting)
+
+落实方案：`docs/SUBAGENTS.md`。子代理不再作为独立会话平铺在面板中，而是归纳在主会话下方以树形层级嵌套展示。
+
+### 1. 数据模型与 Adapter 适配
+- **`AgentSession`**：增加 `parentId: String?`、`subagentDepth: Int` 与 `subagents: [AgentSession]` 字段。
+- **`DshAdapter`**：
+  - 从 `session` 事件流中解析 `parentSession`、`origin` 和 `delegationDepth`；
+  - 从 `subagent/descriptor` 事件中解析 `data.label` 作为子代理任务标题；
+  - 构造完整 `parentId = "dsh:\(parentSession)"` 与 `subagentDepth = delegationDepth`；
+  - 标题优先级严格遵循：`session/title` > `subagent/descriptor.data.label` > `cwd` 目录末段。
+
+### 2. 嵌套纯函数 (`SessionTree.build`)
+- **原则**：`SessionStore` 保持单层扁平结构，所有状态机、`markAsRead`、状态切换通知照旧基于单一会话 ID 运行；仅在交付 UI 前通过 `SessionTree.build` 投影为树形视图。
+- **挂载规则**：匹配 `parentId` 挂入父节点 `subagents`，孙代理（depth 2）挂在直接子代理（depth 1）下，列表按 `stateSince` 升序排列。
+- **孤儿处理**：找不到父会话但处于活跃态（running / waitingForUser）的子代理，作为顶层会话保留显示，副标题标注「`<agent> · 子代理 · <目录>`」；完成或空闲的孤儿直接丢弃。
+- **状态提升**：父会话显示态聚合后代最紧急状态（waitingForUser > running > completed > idle）：
+  - 后代 waiting 时，父会话显示态升为 waitingForUser，waitingLabel 添加「子代理」前缀（如「子代理等待授权」），detail 取该子代理的内容；
+  - 后代 running 且自身 idle/completed 时，父会话显示态升为 running，`stateSince` 取最早运行的子代理时间。
+
+### 3. UI、无障碍（AX）与通知
+- **组件结构**：`SessionRow` 下方承载 `SubagentGroup`，包含汇总条与紧凑子代理列表。
+- **汇总条**：展示 `⑂ N 个子代理 · x 等你 · y 运行中 · z 完成`，等你橙色、运行中蓝色，全完成为「N 个子代理已完成」。
+- **默认展开**：有 running/waiting 后代时默认展开，全完成时默认收起；点击支持用户展开/折叠，高度自适应联动窗口伸缩。
+- **AX 树完全可达**：将主会话按钮与子代理组件解耦，避免外层 AXButton 吞没内部无障碍节点。汇总条与各子代理行均暴露为独立的 `AXButton`，`panel-probe` 可按「子代理 · N 个」及各子会话标题精准点击与验证。
+- **通知**：子代理完成不通知；子代理 waiting 照常发通知且标题带父标题（「父会话标题 › 子代理标题」）。点击子代理通知或子代理行，定位主会话并标记该会话族已读。

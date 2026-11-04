@@ -112,17 +112,32 @@ public final class SessionJumper {
         }
     }
 
-    public func jump(to session: AgentSession) {
+    public func jump(to session: AgentSession, onSuccess: (@MainActor () -> Void)? = nil) {
+        let request = SessionNavigationRequest(kind: session.kind, sessionID: session.id,
+                                               entrypoint: session.entrypoint, cwd: session.cwd)
+        let isCodexCLI = session.kind == .codex && session.originator != nil
+            && !(session.originator?.contains("Desktop") ?? false)
+        // Desktop sessions must keep their exact conversation link even when
+        // the adapter also discovers a backing CLI process.
+        let isDesktop = session.kind == .codex && !isCodexCLI
+            || session.kind == .claudeCode && session.entrypoint != nil && session.entrypoint != "cli"
+        if request.nativeID != nil && (session.pid == nil || isDesktop) && !isCodexCLI {
+            SessionNavigator.shared.open(request, onSuccess: onSuccess)
+            return
+        }
         let tgt = target(for: session)
         switch tgt {
         case .terminal(let host, let windowHint):
             Task { @MainActor in
                 await FocusStrategies.shared.focusTerminal(host: host, titleHint: windowHint, cwd: session.cwd)
+                onSuccess?()
             }
         case .editor(let bundleId, let folder):
             FocusStrategies.shared.focusEditor(bundleId: bundleId, folder: folder)
+            onSuccess?()
         case .app(let bundleId):
             FocusStrategies.shared.activateAppByBundleId(bundleId)
+            onSuccess?()
         }
     }
 

@@ -10,6 +10,11 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     public var pauseUntil: Date? = nil
     public var onNotificationClicked: (@Sendable (String) -> Void)?
     public var sessionProvider: (@Sendable (String) -> AgentSession?)?
+    public var parentTitle: ((String) -> String?)?
+
+    #if DEBUG
+    public var onNotificationSent: (@MainActor (UNNotificationRequest) -> Void)?
+    #endif
 
     private var recentNotifications: [String: (state: SessionState, timestamp: Date)] = [:]
 
@@ -118,10 +123,19 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         }
 
         switch transition {
-        case .added(let s):
-            sendNotification(for: s, previousState: nil)
-        case .stateChanged(let s, let fromState, _):
-            sendNotification(for: s, previousState: fromState)
+        case .added(let session):
+            // .added only notifies if state is waitingForUser (avoids false alerts on new/idle sessions)
+            if session.state == .waitingForUser {
+                sendNotification(for: session, previousState: nil)
+            }
+        case .stateChanged(let session, let fromState, let toState):
+            if toState == .completed {
+                // 子代理完成不发通知（只在主会话完成时通知）
+                if session.parentId != nil { return }
+                sendNotification(for: session, previousState: fromState)
+            } else if toState == .waitingForUser {
+                sendNotification(for: session, previousState: fromState)
+            }
         case .removed:
             break
         }
@@ -139,8 +153,9 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         }
         recentNotifications[key] = (session.state, now)
 
+        let parentTitleText = session.parentId.flatMap { parentTitle?($0) }
         let content = UNMutableNotificationContent()
-        content.title = NotificationFormatter.formatTitle(for: session)
+        content.title = NotificationFormatter.formatTitle(for: session, parentTitle: parentTitleText)
         content.subtitle = NotificationFormatter.formatSubtitle(for: session)
         content.body = NotificationFormatter.formatBody(for: session)
         content.threadIdentifier = session.id
@@ -170,6 +185,10 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             content: content,
             trigger: nil // immediate delivery
         )
+
+        #if DEBUG
+        onNotificationSent?(request)
+        #endif
 
         guard Bundle.main.bundleIdentifier != nil else { return }
         UNUserNotificationCenter.current().add(request) { error in
@@ -267,7 +286,6 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             }
 
             guard let sid = sessionId else { return }
-            self.onNotificationClicked?(sid)
 
             let sessionToJump: AgentSession
             if let existing = self.sessionProvider?(sid) {
@@ -284,7 +302,9 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
                     originator: originator
                 )
             }
-            SessionJumper.shared.jump(to: sessionToJump)
+            SessionJumper.shared.jump(to: sessionToJump) {
+                self.onNotificationClicked?(sid)
+            }
         }
         completionHandler()
     }

@@ -11,66 +11,72 @@ struct SessionRow: View {
 
     var body: some View {
         let isSelected = session.id == viewModel.keyboardSelectionID
-
-        Button(action: {
-            if session.state == .completed {
-                withAnimation(.smooth) {
-                    viewModel.markAsRead(id: session.id)
-                }
-            }
-            SessionJumper.shared.jump(to: session)
-        }) {
-            HStack(alignment: session.state == .running ? .center : .top, spacing: 10) {
-                Image(nsImage: IconManager.shared.icon(for: session.kind, isDark: colorScheme == .dark))
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: 34, height: 34)
-                    .padding(-2)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(NotificationFormatter.cleanTitle(session.title))
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundColor(session.state == .idle ? .secondary : .primary)
-                            .lineLimit(1)
-                        Spacer()
-                        timeView
+        VStack(alignment: .leading, spacing: 0) {
+            Button(action: {
+                SessionJumper.shared.jump(to: session) {
+                    withAnimation(.smooth) {
+                        viewModel.markAsRead(id: session.id)
                     }
+                }
+            }) {
+                HStack(alignment: session.state == .running && session.subagents.isEmpty ? .center : .top, spacing: 10) {
+                    Image(nsImage: IconManager.shared.icon(for: session.kind, isDark: colorScheme == .dark))
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 34, height: 34)
+                        .padding(-2)
 
-                    let cwdPart = session.cwd.map { ($0 as NSString).lastPathComponent } ?? ""
-                    let sub = cwdPart.isEmpty ? session.kind.displayName : "\(session.kind.displayName) · \(cwdPart)"
-                    HStack(spacing: 4) {
-                        Text(sub)
-                            .font(.system(size: 11))
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
-                        Spacer()
-                        if let usage = session.usage {
-                            UsageChip(usage: usage)
-                                .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(NotificationFormatter.cleanTitle(session.title))
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundColor(session.state == .idle ? .secondary : .primary)
+                                .lineLimit(1)
+                            Spacer()
+                            timeView
+                        }
+
+                        let cwdPart = session.cwd.map { ($0 as NSString).lastPathComponent } ?? ""
+                        let isOrphanSubagent = session.parentId != nil || session.subagentDepth > 0
+                        let sub = isOrphanSubagent
+                            ? (cwdPart.isEmpty ? "\(session.kind.displayName) · 子代理" : "\(session.kind.displayName) · 子代理 · \(cwdPart)")
+                            : (cwdPart.isEmpty ? session.kind.displayName : "\(session.kind.displayName) · \(cwdPart)")
+                        HStack(spacing: 4) {
+                            Text(sub)
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                            Spacer()
+                            if let usage = session.usage {
+                                UsageChip(usage: usage)
+                            }
+                        }
+
+                        accessoryView
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if !session.subagents.isEmpty {
+                SubagentGroup(subagents: session.subagents) { _ in
+                    SessionJumper.shared.jump(to: session) {
+                        withAnimation(.smooth) {
+                            viewModel.markAsRead(id: session.id)
                         }
                     }
-
-                    accessoryView
-
-                    if let usage = session.usage,
-                       let usageLabel = UsageFormatter.accessibilityLabel(usage: usage) {
-                        Text(usageLabel)
-                            .frame(width: 0, height: 0)
-                            .clipped()
-                            .opacity(0)
-                    }
                 }
+                .padding(.leading, 44)
             }
-            .padding(EdgeInsets(top: session.state == .running ? 7 : 8, leading: 8, bottom: session.state == .running ? 7 : 8, trailing: 8))
-            .background((isHovered || isSelected) ? AnyShapeStyle(.fill.quaternary) : AnyShapeStyle(Color.clear))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(isSelected ? Color.accentColor.opacity(0.7) : Color.clear, lineWidth: 1.5)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
-        .buttonStyle(.plain)
+        .padding(EdgeInsets(top: session.state == .running ? 7 : 8, leading: 8, bottom: session.state == .running ? 7 : 8, trailing: 8))
+        .background((isHovered || isSelected) ? AnyShapeStyle(.fill.quaternary) : AnyShapeStyle(Color.clear))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(isSelected ? Color.accentColor.opacity(0.7) : Color.clear, lineWidth: 1.5)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .accessibilityValue(isSelected ? "已选中" : "")
         .onContinuousHover { phase in
             switch phase {

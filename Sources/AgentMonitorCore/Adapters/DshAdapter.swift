@@ -108,7 +108,7 @@ public final class DshAdapter: AgentAdapter, @unchecked Sendable {
                 }
 
                 let nativeId = summary.sessionId ?? sessionDir.lastPathComponent
-                let title = summary.title ?? summary.cwdLastComponent ?? unslug(slugDir.lastPathComponent)
+                let title = summary.title ?? summary.subagentLabel ?? summary.cwdLastComponent ?? unslug(slugDir.lastPathComponent)
 
                 var state: SessionState = .idle
                 var waitingLabel: String? = nil
@@ -133,6 +133,10 @@ public final class DshAdapter: AgentAdapter, @unchecked Sendable {
                     state = .idle
                 }
 
+                let isSubagent = summary.origin == "subagent" && summary.parentSession != nil
+                let parentId = isSubagent ? "\(kind.rawValue):\(summary.parentSession!)" : nil
+                let subagentDepth = isSubagent ? summary.delegationDepth : 0
+
                 let session = AgentSession(
                     id: "\(kind.rawValue):\(nativeId)",
                     kind: kind,
@@ -144,7 +148,9 @@ public final class DshAdapter: AgentAdapter, @unchecked Sendable {
                     detail: summary.detail,
                     detailIsCommand: detailIsCommand,
                     waitingLabel: waitingLabel,
-                    suppressCompletion: summary.lastTurnAborted
+                    suppressCompletion: summary.lastTurnAborted,
+                    parentId: parentId,
+                    subagentDepth: subagentDepth
                 )
                 results.append(session)
             }
@@ -174,6 +180,10 @@ public final class DshAdapter: AgentAdapter, @unchecked Sendable {
         var hasPendingApproval: Bool = false
         var detail: String?
         var detailIsCommand: Bool = false
+        var parentSession: String?
+        var origin: String?
+        var delegationDepth: Int = 0
+        var subagentLabel: String?
     }
 
     private func getOrParseSummary(fileURL: URL, mtime: Date, fileSize: Int) -> DshSessionSummary? {
@@ -227,6 +237,22 @@ public final class DshAdapter: AgentAdapter, @unchecked Sendable {
                 if let cwd = json["cwd"] as? String {
                     summary.cwd = cwd
                     summary.cwdLastComponent = (cwd as NSString).lastPathComponent
+                }
+                if let parent = json["parentSession"] as? String {
+                    summary.parentSession = parent
+                }
+                if let orig = json["origin"] as? String {
+                    summary.origin = orig
+                }
+                if let depth = json["delegationDepth"] as? Int {
+                    summary.delegationDepth = depth
+                }
+            } else if type == "subagent/descriptor" {
+                if let data = json["data"] as? [String: Any], let label = data["label"] as? String {
+                    let clean = label.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !clean.isEmpty {
+                        summary.subagentLabel = clean
+                    }
                 }
             } else if type == "session/title" {
                 if let data = json["data"] as? [String: Any], let title = data["title"] as? String {

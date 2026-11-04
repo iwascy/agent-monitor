@@ -63,7 +63,7 @@ cat <<'EOF' > "$CONTENTS_DIR/Info.plist"
     <key>CFBundleExecutable</key>
     <string>AgentMonitor</string>
     <key>CFBundleIconFile</key>
-    <string>AppIcon</string>
+    <string>AppIcon.icns</string>
     <key>CFBundleIdentifier</key>
     <string>com.cy.agentmonitor</string>
     <key>CFBundleInfoDictionaryVersion</key>
@@ -100,6 +100,13 @@ codesign --force --sign - "$APP_DIR"
 
 echo "==> Registering with LaunchServices (build $BUILD_VERSION)..."
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP_DIR"
+
+if [ -d "/Applications/AgentMonitor.app" ] && [ -w "/Applications/AgentMonitor.app" ]; then
+    echo "==> Updating /Applications/AgentMonitor.app..."
+    rm -rf /Applications/AgentMonitor.app
+    cp -R "$APP_DIR" /Applications/AgentMonitor.app
+    /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f /Applications/AgentMonitor.app
+fi
 
 echo "==> Successfully built: $REPO_ROOT/$APP_DIR"
 echo "To launch: open $REPO_ROOT/$APP_DIR"

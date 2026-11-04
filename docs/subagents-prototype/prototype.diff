@@ -1,0 +1,127 @@
+diff --git a/Sources/AgentMonitor/MonitorViewModel.swift b/Sources/AgentMonitor/MonitorViewModel.swift
+index 1520011..0410fb6 100644
+--- a/Sources/AgentMonitor/MonitorViewModel.swift
++++ b/Sources/AgentMonitor/MonitorViewModel.swift
+@@ -108,6 +108,8 @@ public final class MonitorViewModel: ObservableObject {
+         if let mock = env["AGENT_MONITOR_MOCK_DATA"] {
+             if mock.lowercased() == "empty" {
+                 self.sessions = []
++            } else if mock.lowercased() == "subagents" {
++                self.sessions = MonitorViewModel.mockSessionsSubagents()
+             } else if mock.lowercased() == "large" {
+                 self.sessions = MonitorViewModel.mockSessionsLarge()
+             } else {
+@@ -143,6 +145,60 @@ public final class MonitorViewModel: ObservableObject {
+         sessionStore.start()
+     }
+ 
++    public static func mockSessionsSubagents() -> [AgentSession] {
++        let now = Date()
++        func sub(_ id: String, _ title: String, _ state: SessionState, _ ago: TimeInterval, _ detail: String?, children: [AgentSession] = []) -> AgentSession {
++            AgentSession(id: "ds:\(id)", kind: .dsh, title: title, state: state,
++                         stateSince: now.addingTimeInterval(-ago), lastActivity: now.addingTimeInterval(-ago),
++                         detail: detail, subagents: children)
++        }
++        return [
++            AgentSession(
++                id: "cx:sub-parent", kind: .codex, title: "迁移设置页到新存储",
++                cwd: "/Users/cy/code/settings-kit", state: .waitingForUser,
++                stateSince: now.addingTimeInterval(-90), lastActivity: now.addingTimeInterval(-90),
++                detail: "rm -rf ./legacy-cache", detailIsCommand: true, waitingLabel: "子代理等待授权",
++                subagents: [
++                    AgentSession(id: "cx:s1", kind: .codex, title: "清理旧缓存", state: .waitingForUser,
++                                 stateSince: now.addingTimeInterval(-90), detail: "rm -rf ./legacy-cache",
++                                 detailIsCommand: true, waitingLabel: "等待授权"),
++                    AgentSession(id: "cx:s2", kind: .codex, title: "补齐迁移测试", state: .running,
++                                 stateSince: now.addingTimeInterval(-215), detail: "swift test --filter Migration")
++                ]
++            ),
++            AgentSession(
++                id: "ds:sub-parent", kind: .dsh, title: "梳理插件加载流程",
++                cwd: "/Users/cy/code/plugin-host", state: .running,
++                stateSince: now.addingTimeInterval(-252), lastActivity: now,
++                detail: "汇总子代理结果…",
++                subagents: [
++                    sub("a", "扫描入口与注册表", .running, 121, "读取 Sources/Loader/Registry.swift"),
++                    sub("b", "整理依赖关系图", .running, 107, "正在思考…", children: [
++                        sub("b1", "列出动态库依赖", .running, 33, "otool -L PluginHost")
++                    ]),
++                    sub("c", "检查沙盒权限声明", .completed, 60, "共 4 项 entitlement，无异常")
++                ]
++            ),
++            AgentSession(
++                id: "cc:sub-parent", kind: .claudeCode, title: "子代理识别方案",
++                cwd: "/Users/cy/code/agent-monitor", state: .completed,
++                stateSince: now.addingTimeInterval(-300), lastActivity: now.addingTimeInterval(-300),
++                detail: "方案已整理，三种状态的效果图已生成",
++                completedDuration: 412,
++                subagents: [
++                    AgentSession(id: "cc:s1", kind: .claudeCode, title: "调研 dsh 数据格式", state: .completed, stateSince: now.addingTimeInterval(-420), detail: "找到 parentSession 字段"),
++                    AgentSession(id: "cc:s2", kind: .claudeCode, title: "调研 Codex rollout", state: .completed, stateSince: now.addingTimeInterval(-400), detail: "本机暂无子代理样本"),
++                    AgentSession(id: "cc:s3", kind: .claudeCode, title: "核对面板布局", state: .completed, stateSince: now.addingTimeInterval(-380), detail: "fixedSize 需保留")
++                ]
++            ),
++            AgentSession(
++                id: "ag:plain", kind: .antigravity, title: "更新 README 截图",
++                cwd: "/Users/cy/code/agent-monitor", state: .running,
++                stateSince: now.addingTimeInterval(-48), detail: "正在生成截图…"
++            )
++        ]
++    }
++
+     public static func mockSessions() -> [AgentSession] {
+         let now = Date()
+         return [
+diff --git a/Sources/AgentMonitor/Panel/SessionRow.swift b/Sources/AgentMonitor/Panel/SessionRow.swift
+index ff5dc31..a3dca9d 100644
+--- a/Sources/AgentMonitor/Panel/SessionRow.swift
++++ b/Sources/AgentMonitor/Panel/SessionRow.swift
+@@ -15,7 +15,7 @@ struct SessionRow: View {
+             }
+             activateApp(for: session.kind, entrypoint: session.entrypoint, cwd: session.cwd)
+         }) {
+-            HStack(alignment: session.state == .running ? .center : .top, spacing: 10) {
++            HStack(alignment: session.state == .running && session.subagents.isEmpty ? .center : .top, spacing: 10) {
+                 Image(nsImage: IconManager.shared.icon(for: session.kind, isDark: colorScheme == .dark))
+                     .resizable()
+                     .aspectRatio(contentMode: .fit)
+@@ -40,6 +40,10 @@ struct SessionRow: View {
+                         .lineLimit(1)
+ 
+                     accessoryView
++
++                    if !session.subagents.isEmpty {
++                        SubagentGroup(subagents: session.subagents)
++                    }
+                 }
+             }
+             .padding(EdgeInsets(top: session.state == .running ? 7 : 8, leading: 8, bottom: session.state == .running ? 7 : 8, trailing: 8))
+diff --git a/Sources/AgentMonitorCore/Models.swift b/Sources/AgentMonitorCore/Models.swift
+index f62bcb2..3fe0da2 100644
+--- a/Sources/AgentMonitorCore/Models.swift
++++ b/Sources/AgentMonitorCore/Models.swift
+@@ -55,6 +55,7 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
+     public var completedDuration: TimeInterval?
+     public var entrypoint: String?
+     public var suppressCompletion: Bool // 本轮结束不升级为 completed（例如 Codex 定时任务的 heartbeat）
++    public var subagents: [AgentSession] // 挂在本会话下的子代理（可再嵌套一层）
+ 
+     public init(
+         id: String,
+@@ -69,7 +70,8 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
+         waitingLabel: String? = nil,
+         completedDuration: TimeInterval? = nil,
+         entrypoint: String? = nil,
+-        suppressCompletion: Bool = false
++        suppressCompletion: Bool = false,
++        subagents: [AgentSession] = []
+     ) {
+         self.id = id
+         self.kind = kind
+@@ -84,5 +86,6 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
+         self.completedDuration = completedDuration
+         self.entrypoint = entrypoint
+         self.suppressCompletion = suppressCompletion
++        self.subagents = subagents
+     }
+ }

@@ -76,4 +76,41 @@ struct MonitorViewModelTests {
         // highestState 也不再是 waitingForUser，而是 running（由 s3 贡献）
         #expect(vm.highestState == .running)
     }
+
+    @Test("Tree projection preserves usage and applies mute filters before nesting")
+    func testTreeWithMuteAndUsage() {
+        let previous = AppSettings.shared.muteRules
+        defer { AppSettings.shared.muteRules = previous }
+        AppSettings.shared.muteRules = []
+        let vm = MonitorViewModel(sessionStore: SessionStore(adapters: []))
+        let parent = AgentSession(id: "parent", kind: .dsh, title: "Parent", cwd: "/parent",
+                                  state: .idle, usage: SessionUsage(inputTokens: 42))
+        let child = AgentSession(id: "child", kind: .dsh, title: "Child", cwd: "/child",
+                                 state: .waitingForUser, parentId: "parent")
+        vm.updateSessionsManually([parent, child])
+        #expect(vm.sessions.count == 1)
+        #expect(vm.sessions.first?.state == .waitingForUser)
+        #expect(vm.sessions.first?.usage?.inputTokens == 42)
+        #expect(vm.sessions.first?.subagents.map(\.id) == ["child"])
+        vm.hideInPanel(cwd: "/child")
+        #expect(vm.sessions.first?.state == .idle)
+        #expect(vm.sessions.first?.subagents.isEmpty == true)
+    }
+
+    @Test("Reading a child clears the completed family without losing the tree")
+    func testMarkChildFamilyRead() {
+        let previous = AppSettings.shared.muteRules
+        defer { AppSettings.shared.muteRules = previous }
+        AppSettings.shared.muteRules = []
+        let vm = MonitorViewModel(sessionStore: SessionStore(adapters: []))
+        let parent = AgentSession(id: "parent", kind: .dsh, title: "Parent", state: .completed)
+        let child = AgentSession(id: "child", kind: .dsh, title: "Child", state: .completed, parentId: "parent")
+        let grandchild = AgentSession(id: "grandchild", kind: .dsh, title: "Grandchild", state: .completed, parentId: "child")
+        vm.updateSessionsManually([parent, child, grandchild])
+        vm.markAsRead(id: "child")
+        #expect(vm.sessions.count == 1)
+        #expect(vm.sessions.first?.state == .idle)
+        #expect(vm.sessions.first?.subagents.first?.state == .idle)
+        #expect(vm.sessions.first?.subagents.first?.subagents.first?.state == .idle)
+    }
 }

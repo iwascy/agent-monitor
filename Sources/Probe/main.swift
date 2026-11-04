@@ -73,6 +73,9 @@ for adapter in adapters {
             }
             print("      CWD: \(s.cwd ?? "<none>")")
             print("      State (raw): \(s.state.rawValue)")
+            if let parentId = s.parentId {
+                print("      Parent ID: \(parentId) (depth: \(s.subagentDepth))")
+            }
             if let label = s.waitingLabel {
                 print("      Waiting Label: \(label)")
             }
@@ -99,6 +102,12 @@ let transitions = store.refresh()
 let storeSessions = store.currentSessions
 print("Total sessions tracked: \(storeSessions.count)")
 print("Initial transitions generated: \(transitions.count) (suppressed from notifications)")
+
+let treeSessions = SessionTree.build(storeSessions)
+print("Top-level sessions (after SessionTree.build): \(treeSessions.count)")
+for (idx, s) in treeSessions.enumerated() {
+    print("  [\(idx + 1)] [\(s.kind.shortCode)] \(s.title) (state: \(s.state.rawValue), subagents: \(s.subagents.count))")
+}
 
 for (idx, s) in storeSessions.enumerated() {
     print("  [\(idx + 1)] [\(s.kind.shortCode)] \(s.title)")

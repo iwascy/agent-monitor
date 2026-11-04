@@ -921,4 +921,64 @@ struct AgentMonitorCoreTests {
         let raw = "已创建 [docs/agents.md](file:///Users/cy/code/mac-r"
         #expect(NotificationFormatter.cleanBody(raw) == "已创建 docs/agents.md")
     }
+
+    // MARK: - DSH Subagent Tests
+
+    @Test("DSH: Subagent session parsing with zstd")
+    func testDshSubagentZstd() throws {
+        let fm = FileManager.default
+        let baseDir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let slugDir = baseDir.appendingPathComponent("--Users-cy-code-test--")
+        let parentDir = slugDir.appendingPathComponent("session-parent")
+        let childDir = slugDir.appendingPathComponent("session-child")
+
+        try fm.createDirectory(at: parentDir, withIntermediateDirectories: true)
+        try fm.createDirectory(at: childDir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: baseDir) }
+
+        func writeZstd(lines: [String], to destination: URL) throws {
+            let text = lines.joined(separator: "\n") + "\n"
+            let tempPlain = destination.deletingLastPathComponent().appendingPathComponent(UUID().uuidString + ".tmp")
+            try text.write(to: tempPlain, atomically: true, encoding: .utf8)
+            defer { try? fm.removeItem(at: tempPlain) }
+
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/zstd")
+            process.arguments = ["-q", "-f", "-o", destination.path, tempPlain.path]
+            try process.run()
+            process.waitUntilExit()
+        }
+
+        let parentLines = [
+            #"{"type":"session","version":4,"id":"session-parent","cwd":"/Users/cy/code/test"}"#,
+            #"{"type":"session/title","data":{"title":"父任务主线"}}"#
+        ]
+        try writeZstd(lines: parentLines, to: parentDir.appendingPathComponent("session.v4.jsonl.zstd"))
+
+        let childLines = [
+            #"{"type":"session","version":4,"id":"session-child","cwd":"/Users/cy/code/test","parentSession":"session-parent","origin":"subagent","delegationDepth":1}"#,
+            #"{"type":"subagent/descriptor","seq":0,"data":{"label":"分析子代理模块"}}"#
+        ]
+        try writeZstd(lines: childLines, to: childDir.appendingPathComponent("session.v4.jsonl.zstd"))
+
+        let adapter = DshAdapter(
+            sessionsDirectory: baseDir,
+            zstdExecutablePath: "/opt/homebrew/bin/zstd",
+            isLockHeld: { _ in false },
+            maxAgeSeconds: 3600
+        )
+
+        let sessions = try adapter.scan()
+        #expect(sessions.count == 2)
+
+        let parent = try #require(sessions.first(where: { $0.id == "dsh:session-parent" }))
+        #expect(parent.title == "父任务主线")
+        #expect(parent.parentId == nil)
+        #expect(parent.subagentDepth == 0)
+
+        let child = try #require(sessions.first(where: { $0.id == "dsh:session-child" }))
+        #expect(child.title == "分析子代理模块")
+        #expect(child.parentId == "dsh:session-parent")
+        #expect(child.subagentDepth == 1)
+    }
 }

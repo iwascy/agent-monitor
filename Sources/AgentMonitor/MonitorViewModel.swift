@@ -226,12 +226,21 @@ public final class MonitorViewModel: ObservableObject {
         }
 
         if let mock = env["AGENT_MONITOR_MOCK_DATA"] {
-            if mock.lowercased() == "empty" {
+            if mock.lowercased() == "navigation",
+               let sessionID = env["AGENT_MONITOR_NAVIGATION_SESSION"],
+               let rawKind = sessionID.split(separator: ":", maxSplits: 1).first,
+               let kind = AgentKind(rawValue: String(rawKind)) {
+                // Explicit opt-in fixture for end-to-end navigation checks. Uses
+                // real IDs supplied by the probe without changing agent files.
+                self.rawSessions = [AgentSession(id: sessionID, kind: kind, title: "会话跳转验证", state: .idle,
+                                              entrypoint: env["AGENT_MONITOR_NAVIGATION_ENTRYPOINT"])]
+                self.isIdleExpanded = true
+            } else if mock.lowercased() == "empty" {
                 self.rawSessions = []
+            } else if mock.lowercased() == "subagents" {
+                self.rawSessions = MonitorViewModel.mockSessionsSubagentsFlat()
             } else if mock.lowercased() == "large" {
                 self.rawSessions = MonitorViewModel.mockSessionsLarge()
-            } else if mock.lowercased() == "subagents" {
-                self.rawSessions = MonitorViewModel.mockSubagentSessions()
             } else {
                 self.rawSessions = MonitorViewModel.mockSessions()
             }
@@ -299,6 +308,10 @@ public final class MonitorViewModel: ObservableObject {
             }
         }
 
+        notifier.parentTitle = { [weak self] parentId in
+            self?.sessionStore.currentSessions.first(where: { $0.id == parentId })?.title
+        }
+
         sessionStore.onTransition = { [weak self] transition in
             Task { @MainActor in
                 guard let self = self else { return }
@@ -308,7 +321,15 @@ public final class MonitorViewModel: ObservableObject {
         }
 
         notifier.sessionProvider = { [weak self] id in
-            self?.sessionStore.currentSessions.first { $0.id == id }
+            guard let self else { return nil }
+            let flat = self.sessionStore.currentSessions
+            var session = flat.first { $0.id == id }
+            var visited = Set<String>()
+            while let parentID = session?.parentId, visited.insert(parentID).inserted,
+                  let parent = flat.first(where: { $0.id == parentID }) {
+                session = parent
+            }
+            return session
         }
 
         notifier.onNotificationClicked = { [weak self] sessionId in
@@ -373,6 +394,111 @@ public final class MonitorViewModel: ObservableObject {
             AgentSession(id: "ag:child-3", kind: .antigravity, title: "已结束的子代理", state: .idle, suppressCompletion: true, parentSessionID: "ag:parent"),
             AgentSession(id: "ag:grandchild", kind: .antigravity, title: "布局检查", state: .running, parentSessionID: "ag:child-1")
         ]
+    }
+
+    public static func mockSessionsSubagentsFlat() -> [AgentSession] {
+        let now = Date()
+        return [
+            // 场景 1：子代理等你（Codex 父）
+            AgentSession(
+                id: "cx:sub-parent", kind: .codex, title: "迁移设置页到新存储",
+                cwd: "/Users/cy/code/settings-kit", state: .idle,
+                stateSince: now.addingTimeInterval(-240), lastActivity: now.addingTimeInterval(-90),
+                detail: "等待子代理…", parentId: nil
+            ),
+            AgentSession(
+                id: "cx:s1", kind: .codex, title: "清理旧缓存",
+                cwd: "/Users/cy/code/settings-kit", state: .waitingForUser,
+                stateSince: now.addingTimeInterval(-215), lastActivity: now.addingTimeInterval(-90),
+                detail: "rm -rf ./legacy-cache", detailIsCommand: true, waitingLabel: "等待授权",
+                parentId: "cx:sub-parent", subagentDepth: 1
+            ),
+            AgentSession(
+                id: "cx:s2", kind: .codex, title: "补齐迁移测试",
+                cwd: "/Users/cy/code/settings-kit", state: .running,
+                stateSince: now.addingTimeInterval(-90), lastActivity: now.addingTimeInterval(-90),
+                detail: "swift test --filter Migration",
+                parentId: "cx:sub-parent", subagentDepth: 1
+            ),
+
+            // 场景 2：子代理运行中含孙代理（dsh 父）
+            AgentSession(
+                id: "ds:sub-parent", kind: .dsh, title: "梳理插件加载流程",
+                cwd: "/Users/cy/code/plugin-host", state: .idle,
+                stateSince: now.addingTimeInterval(-252), lastActivity: now,
+                detail: "汇总子代理结果…", parentId: nil
+            ),
+            AgentSession(
+                id: "ds:a", kind: .dsh, title: "扫描入口与注册表",
+                cwd: "/Users/cy/code/plugin-host", state: .running,
+                stateSince: now.addingTimeInterval(-121), lastActivity: now.addingTimeInterval(-121),
+                detail: "读取 Sources/Loader/Registry.swift",
+                parentId: "ds:sub-parent", subagentDepth: 1
+            ),
+            AgentSession(
+                id: "ds:b", kind: .dsh, title: "整理依赖关系图",
+                cwd: "/Users/cy/code/plugin-host", state: .running,
+                stateSince: now.addingTimeInterval(-107), lastActivity: now.addingTimeInterval(-107),
+                detail: "正在思考…",
+                parentId: "ds:sub-parent", subagentDepth: 1
+            ),
+            AgentSession(
+                id: "ds:b1", kind: .dsh, title: "列出动态库依赖",
+                cwd: "/Users/cy/code/plugin-host", state: .running,
+                stateSince: now.addingTimeInterval(-33), lastActivity: now.addingTimeInterval(-33),
+                detail: "otool -L PluginHost",
+                parentId: "ds:b", subagentDepth: 2
+            ),
+            AgentSession(
+                id: "ds:c", kind: .dsh, title: "检查沙盒权限声明",
+                cwd: "/Users/cy/code/plugin-host", state: .completed,
+                stateSince: now.addingTimeInterval(-60), lastActivity: now.addingTimeInterval(-60),
+                detail: "共 4 项 entitlement，无异常",
+                parentId: "ds:sub-parent", subagentDepth: 1
+            ),
+
+            // 场景 3：全部完成（Claude Code 父）
+            AgentSession(
+                id: "cc:sub-parent", kind: .claudeCode, title: "子代理识别方案",
+                cwd: "/Users/cy/code/agent-monitor", state: .completed,
+                stateSince: now.addingTimeInterval(-300), lastActivity: now.addingTimeInterval(-300),
+                detail: "方案已整理，三种状态的效果图已生成",
+                completedDuration: 412, parentId: nil
+            ),
+            AgentSession(
+                id: "cc:s1", kind: .claudeCode, title: "调研 dsh 数据格式",
+                cwd: "/Users/cy/code/agent-monitor", state: .completed,
+                stateSince: now.addingTimeInterval(-420), lastActivity: now.addingTimeInterval(-420),
+                detail: "找到 parentSession 字段",
+                parentId: "cc:sub-parent", subagentDepth: 1
+            ),
+            AgentSession(
+                id: "cc:s2", kind: .claudeCode, title: "调研 Codex rollout",
+                cwd: "/Users/cy/code/agent-monitor", state: .completed,
+                stateSince: now.addingTimeInterval(-400), lastActivity: now.addingTimeInterval(-400),
+                detail: "本机暂无子代理样本",
+                parentId: "cc:sub-parent", subagentDepth: 1
+            ),
+            AgentSession(
+                id: "cc:s3", kind: .claudeCode, title: "核对面板布局",
+                cwd: "/Users/cy/code/agent-monitor", state: .completed,
+                stateSince: now.addingTimeInterval(-380), lastActivity: now.addingTimeInterval(-380),
+                detail: "fixedSize 需保留",
+                parentId: "cc:sub-parent", subagentDepth: 1
+            ),
+
+            // 对照：无子代理普通会话（Antigravity）
+            AgentSession(
+                id: "ag:plain", kind: .antigravity, title: "更新 README 截图",
+                cwd: "/Users/cy/code/agent-monitor", state: .running,
+                stateSince: now.addingTimeInterval(-48), lastActivity: now.addingTimeInterval(-48),
+                detail: "正在生成截图…", parentId: nil
+            )
+        ]
+    }
+
+    public static func mockSessionsSubagents() -> [AgentSession] {
+        SessionTree.build(mockSessionsSubagentsFlat())
     }
 
     public static func mockSessions() -> [AgentSession] {
@@ -595,19 +721,52 @@ public final class MonitorViewModel: ObservableObject {
             }
             return true
         }
-        if self.sessions != filtered {
-            self.sessions = filtered
+        // Antigravity keeps the existing flat hierarchy used by SessionGroup.
+        // Preserve its child order while building nested DSH display rows.
+        let tree = SessionTree.build(filtered.filter { $0.parentSessionID == nil })
+            + filtered.filter { $0.parentSessionID != nil }
+        if self.sessions != tree {
+            self.sessions = tree
         }
         recalculateOverdue()
     }
 
     public func markAsRead(id: String) {
-        sessionStore.markAsRead(id: id)
+        let current = rawSessions
+        var idsToMark = Set<String>()
+        idsToMark.insert(id)
+
+        // 向上追溯到根会话
+        var rootId = id
+        var visited = Set<String>()
+        while let currentSession = current.first(where: { $0.id == rootId && !visited.contains($0.id) }),
+              let pid = currentSession.parentId {
+            visited.insert(rootId)
+            rootId = pid
+        }
+        idsToMark.insert(rootId)
+
+        // 递归向下收集 rootId 的所有后代
+        var traversed = Set<String>()
+        func collectDescendants(parent: String) {
+            guard traversed.insert(parent).inserted else { return }
+            for s in current where s.parentId == parent {
+                idsToMark.insert(s.id)
+                collectDescendants(parent: s.id)
+            }
+        }
+        collectDescendants(parent: rootId)
+
+        for sid in idsToMark {
+            sessionStore.markAsRead(id: sid)
+        }
         let storeSessions = sessionStore.currentSessions
         if !storeSessions.isEmpty {
             rawSessions = storeSessions
-        } else if let idx = rawSessions.firstIndex(where: { $0.id == id }) {
-            rawSessions[idx].state = .idle
+        } else {
+            for idx in rawSessions.indices where idsToMark.contains(rawSessions[idx].id) && rawSessions[idx].state == .completed {
+                rawSessions[idx].state = .idle
+            }
         }
         applyMuteFilters()
     }

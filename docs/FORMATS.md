@@ -118,6 +118,20 @@
 - **解压容错**：dsh 正在写入时，最后一个 zstd frame 可能不完整，`zstd -dc` 的输出可能停在多字节字符或 JSON 行中间。解码时使用宽松 UTF-8 解码，并丢弃末尾没有换行的那一行。
 - **无活动 turn 防误判**：若会话持有锁但既无活跃 turn 也无等待提问（例如常驻 `--profile paseo`），判定为 **`idle`**，严禁误判为 running。
 
+### 4.4 子代理与孙代理规范 (Subagents & Delegation)
+- **子代理标记**：
+  - `session` 事件行中带有 `"origin": "subagent"`，`"parentSession": "<parentId>"`，`"delegationDepth": <int>`（1 为直接子代理，2 为孙代理）。
+  - `parentSession`：为父会话 session 行的 `id`（可能带 `session-` 前缀或为裸 UUID，按原样匹配）。
+  - 构造完整父会话 ID：`"dsh:\(parentSession)"`。
+- **子代理任务描述**：
+  - 事件 `type == "subagent/descriptor"`，提取 `data.label` 作为子任务标题。
+  - 标题优先级：`session/title` > `subagent/descriptor.data.label` > cwd 末段。
+- **嵌套与聚合规范**：
+  - `SessionStore` 保持扁平结构；交给 UI 前由 `SessionTree.build` 聚合为树形，挂在父会话的 `subagents` 属性下。
+  - 父会话显示态聚合后代最紧急状态（waitingForUser > running > completed > idle）；后代 waiting 时父会话显示态升为 waitingForUser，waitingLabel 添加「子代理」前缀（如「子代理等待授权」）。
+  - 孤儿子代理：找不到父会话时，活跃态（running / waitingForUser）提升为顶层显示，标注「子代理」；非活跃态（completed / idle）丢弃。
+  - 通知：子代理 completed 不发通知；子代理 waiting 照常发通知且标题带父标题（`NotificationFormatter.formatTitle` 组合为「父会话标题 › 子代理标题」）。
+
 ---
 
 ## 5. Antigravity

@@ -4,10 +4,13 @@
 //   swift scripts/panel-probe.swift [options] [label ...]
 //
 // Each label presses the first button whose AX description ends with it (e.g. "运行中", "全部标为已读",
-// "空闲 · 2 个会话"), then prints the panel window size. Pass no labels to only open the panel.
+// "空闲 · 2 个会话"), then prints the panel window size. Use row:<exact title> for a session row.
+// Pass no labels to only open the panel.
 //
 // Options:
 //   --mock <1|large|empty>   AGENT_MONITOR_MOCK_DATA (default 1); "real" uses live sessions
+//   --navigation-session <kind:nativeID>   one-row fixture for an existing session (no new messages)
+//   --navigation-entrypoint <cli|claude-desktop>   optional fixture entrypoint
 //   --filter <state>         AGENT_MONITOR_FILTER at launch
 //   --idle-expanded          AGENT_MONITOR_IDLE_EXPANDED=1
 //   --scheme <light|dark>    AGENT_MONITOR_COLOR_SCHEME (default light)
@@ -87,6 +90,10 @@ while let arg = args.next() {
     case "--mock":
         let v = args.next()!
         if v == "real" { env["AGENT_MONITOR_MOCK_DATA"] = nil } else { env["AGENT_MONITOR_MOCK_DATA"] = v }
+    case "--navigation-session":
+        env["AGENT_MONITOR_MOCK_DATA"] = "navigation"
+        env["AGENT_MONITOR_NAVIGATION_SESSION"] = args.next()!
+    case "--navigation-entrypoint": env["AGENT_MONITOR_NAVIGATION_ENTRYPOINT"] = args.next()!
     case "--filter": env["AGENT_MONITOR_FILTER"] = args.next()!
     case "--idle-expanded": env["AGENT_MONITOR_IDLE_EXPANDED"] = "1"
     case "--scheme": env["AGENT_MONITOR_COLOR_SCHEME"] = args.next()!
@@ -123,17 +130,19 @@ func cleanup() {
     if wasRunning { _ = runBash("open '\(projectRoot)/build/AgentMonitor.app'") }
 }
 
-var statusItem: AXUIElement?
-for _ in 0..<20 {
-    if let extrasBar = attr(app, "AXExtrasMenuBar"), let item = children(extrasBar as! AXUIElement).first {
-        statusItem = item
+// SwiftUI may publish its status item after the process finishes launching.
+// Wait for AX to expose it instead of assuming a fixed startup duration.
+var readyStatusItem: AXUIElement?
+for _ in 0..<40 {
+    if let extrasBar = attr(app, "AXExtrasMenuBar"),
+       let item = children(extrasBar as! AXUIElement).first {
+        readyStatusItem = item
         break
     }
     Thread.sleep(forTimeInterval: 0.2)
 }
-
-guard let statusItem = statusItem else {
-    print("error: status item not found")
+guard let statusItem = readyStatusItem else {
+    print("error: status item not found within 8 seconds")
     cleanup()
     exit(1)
 }
@@ -190,13 +199,19 @@ for (i, step) in steps.enumerated() {
         report(step: i + 1, title: step)
         continue
     }
-    guard let button = find(window, where: { attr($0, kAXRoleAttribute) as? String == kAXButtonRole && label($0).hasSuffix(step) }) else {
+    let match: (AXUIElement) -> Bool = { element in
+        guard attr(element, kAXRoleAttribute) as? String == kAXButtonRole else { return false }
+        if step.hasPrefix("row:") { return label(element).hasPrefix(String(step.dropFirst(4)) + "、") }
+        return label(element).hasSuffix(step)
+    }
+    guard let button = find(window, where: match) else {
         print("[\(i + 1)] press \"\(step)\": no button found")
         continue
     }
+    let pressedLabel = label(button)
     AXUIElementPerformAction(button, kAXPressAction as CFString)
-    Thread.sleep(forTimeInterval: 1.2)
-    report(step: i + 1, title: "press \"\(label(button))\"")
+    Thread.sleep(forTimeInterval: step.hasPrefix("row:") ? 4.0 : 1.2)
+    report(step: i + 1, title: "press \"\(pressedLabel)\"")
 }
 
 cleanup()

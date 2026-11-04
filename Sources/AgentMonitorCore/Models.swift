@@ -60,6 +60,9 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
     public var originator: String?      // Codex session_meta.originator，例如 "Codex Desktop"、"codex_cli_rs"
     public var usage: SessionUsage?     // F6
     public var parentSessionID: String? // 与 id 相同的带 agent 前缀的父会话 ID
+    public var parentId: String?        // 父会话的完整 id，即 "dsh:<parentSession>"；主会话为 nil
+    public var subagentDepth: Int       // 0 = 主会话
+    public var subagents: [AgentSession] // 仅用于显示的嵌套结果，SessionStore 内部始终为空
 
     public init(
         id: String,
@@ -79,7 +82,10 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
         transcriptPath: String? = nil,
         originator: String? = nil,
         usage: SessionUsage? = nil,
-        parentSessionID: String? = nil
+        parentSessionID: String? = nil,
+        parentId: String? = nil,
+        subagentDepth: Int = 0,
+        subagents: [AgentSession] = []
     ) {
         self.id = id
         self.kind = kind
@@ -94,6 +100,9 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
         self.completedDuration = completedDuration
         self.entrypoint = entrypoint
         self.suppressCompletion = suppressCompletion
+        self.parentId = parentId
+        self.subagentDepth = subagentDepth
+        self.subagents = subagents
         self.pid = pid
         self.transcriptPath = transcriptPath
         self.originator = originator
