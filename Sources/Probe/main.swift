@@ -88,6 +88,9 @@ for adapter in adapters {
             if let detail = s.detail {
                 print("      Detail (isCommand=\(s.detailIsCommand)): \(detail)")
             }
+            if s.state == .running || s.state == .waitingForUser {
+                print("      State Since: \(s.stateSince) (\(Int(Date().timeIntervalSince(s.stateSince)))s ago)")
+            }
             print("      Last Activity: \(s.lastActivity)")
             print("      Age: \(Int(Date().timeIntervalSince(s.lastActivity)))s ago")
             if let u = s.usage {
@@ -122,6 +125,9 @@ for (idx, s) in storeSessions.enumerated() {
         print("      Parent ID: \(parent)")
     }
     print("      State: \(s.state.rawValue)")
+    if s.state == .running || s.state == .waitingForUser {
+        print("      State Since: \(s.stateSince) (\(Int(Date().timeIntervalSince(s.stateSince)))s ago)")
+    }
     print("      Detail: \(s.detail ?? "<none>")")
     print("      Last Activity: \(s.lastActivity)")
     if let u = s.usage {

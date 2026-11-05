@@ -373,7 +373,7 @@ public final class SessionStore: @unchecked Sendable {
                 } else if fresh.state == .running {
                     // Record running start time if freshly transitioning into running
                     if existing.state != .running {
-                        runningStartTimes[id] = now
+                        runningStartTimes[id] = min(now, fresh.stateSince)
                     }
                     // Clear read status if session resumes running
                     readCompletedKeys = readCompletedKeys.filter { !$0.hasPrefix("\(fresh.id):") }
@@ -383,7 +383,9 @@ public final class SessionStore: @unchecked Sendable {
                 if existing.state == fresh.state {
                     fresh.stateSince = existing.stateSince
                 } else {
-                    fresh.stateSince = now
+                    fresh.stateSince = (fresh.state == .running || fresh.state == .waitingForUser)
+                        ? min(now, fresh.stateSince)
+                        : now
                     transitions.append(.stateChanged(session: fresh, from: existing.state, to: fresh.state))
                 }
                 if existing != fresh {
@@ -395,7 +397,9 @@ public final class SessionStore: @unchecked Sendable {
                 if fresh.state == .completed {
                     fresh.state = .idle
                 }
-                fresh.stateSince = fresh.lastActivity
+                if fresh.state != .running && fresh.state != .waitingForUser {
+                    fresh.stateSince = fresh.lastActivity
+                }
                 if fresh.state == .running {
                     runningStartTimes[id] = fresh.stateSince
                 }

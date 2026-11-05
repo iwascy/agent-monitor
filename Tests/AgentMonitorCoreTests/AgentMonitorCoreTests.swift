@@ -239,6 +239,116 @@ struct AgentMonitorCoreTests {
         #expect(completed.title == "Antigravity 已完成任务")
     }
 
+    @Test("Antigravity: Accurate timing with last_user_input_time and transcript waitingSince")
+    func testAntigravityAccurateTiming() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("AntigravityTiming-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let dbURL = tempDir.appendingPathComponent("conversation_summaries.db")
+        var db: OpaquePointer?
+        #expect(sqlite3_open(dbURL.path, &db) == SQLITE_OK)
+        defer { sqlite3_close(db) }
+
+        let schema = """
+        CREATE TABLE conversation_summaries (
+            conversation_id TEXT PRIMARY KEY,
+            title TEXT NOT NULL DEFAULT '',
+            preview TEXT NOT NULL DEFAULT '',
+            step_count INTEGER NOT NULL DEFAULT 0,
+            last_modified_time DATETIME NOT NULL,
+            workspace_uris TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT '',
+            source TEXT NOT NULL DEFAULT '',
+            project_id TEXT NOT NULL DEFAULT '',
+            agent_name TEXT NOT NULL DEFAULT '',
+            parent_conversation_id TEXT NOT NULL DEFAULT '',
+            nesting_depth INTEGER NOT NULL DEFAULT 0,
+            battle_id TEXT NOT NULL DEFAULT '',
+            winning_conversation_id TEXT NOT NULL DEFAULT '',
+            not_fully_idle NUMERIC NOT NULL DEFAULT 0,
+            killed NUMERIC NOT NULL DEFAULT 0,
+            last_user_input_time DATETIME NOT NULL,
+            last_user_input_step_index INTEGER NOT NULL DEFAULT -1,
+            app_data_dir TEXT NOT NULL DEFAULT '',
+            raw_summary BLOB,
+            group_id TEXT NOT NULL DEFAULT ''
+        );
+        """
+        #expect(sqlite3_exec(db, schema, nil, nil, nil) == SQLITE_OK)
+
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "en_US_POSIX")
+        df.timeZone = TimeZone(secondsFromGMT: 0)
+        df.dateFormat = "yyyy-MM-dd HH:mm:ss.SSSSSSZZZZZ"
+
+        let now = Date()
+        let runStart = now.addingTimeInterval(-600) // 10 minutes ago
+        let runLastMod = now.addingTimeInterval(-5) // 5 seconds ago
+        let waitStart = now.addingTimeInterval(-800)
+        let waitLastMod = now.addingTimeInterval(-10)
+
+        let insertSQL = """
+        INSERT INTO conversation_summaries (
+            conversation_id, title, preview, status, not_fully_idle, killed,
+            workspace_uris, last_modified_time, last_user_input_time, step_count
+        ) VALUES (
+            'ag-timing-running', 'Timing Test Running', 'running preview', 'CASCADE_RUN_STATUS_RUNNING', 1, 0,
+            '["file:///Users/cy/code/agent-monitor"]', '\(df.string(from: runLastMod))', '\(df.string(from: runStart))', 42
+        ), (
+            'ag-timing-waiting', 'Timing Test Waiting', 'waiting preview', 'CASCADE_RUN_STATUS_RUNNING', 1, 0,
+            '["file:///Users/cy/code/agent-monitor"]', '\(df.string(from: waitLastMod))', '\(df.string(from: waitStart))', 20
+        );
+        """
+        #expect(sqlite3_exec(db, insertSQL, nil, nil, nil) == SQLITE_OK)
+
+        // Setup brain logs for waiting session
+        let isoFormatter = ISO8601DateFormatter()
+        let questionTime = now.addingTimeInterval(-120) // asked question 2 minutes ago
+        let questionTimeStr = isoFormatter.string(from: questionTime)
+
+        let waitingBrainDir = tempDir.appendingPathComponent("brain/ag-timing-waiting/.system_generated/logs")
+        try FileManager.default.createDirectory(at: waitingBrainDir, withIntermediateDirectories: true)
+        let waitingLog = waitingBrainDir.appendingPathComponent("transcript.jsonl")
+        let transcriptContent = """
+        {"step_index":0,"type":"USER_INPUT","created_at":"\(isoFormatter.string(from: waitStart))","content":"do something"}
+        {"step_index":1,"type":"PLANNER_RESPONSE","created_at":"\(questionTimeStr)","tool_calls":[{"name":"ask_question","arguments":{"question":"Should I proceed?"}}]}
+        """
+        try transcriptContent.write(to: waitingLog, atomically: true, encoding: .utf8)
+
+        let adapter = AntigravityAdapter(baseDirectory: tempDir, isLockHeld: { _ in true }, maxAgeSeconds: 3600)
+        let sessions = try adapter.scan()
+        #expect(sessions.count == 2)
+
+        let running = try #require(sessions.first(where: { $0.id == "antigravity:ag-timing-running" }))
+        #expect(running.state == .running)
+        // stateSince must reflect the user input start time (600s ago), NOT last_modified_time (5s ago)
+        #expect(abs(running.stateSince.timeIntervalSince(runStart)) < 1.0)
+        #expect(abs(running.lastActivity.timeIntervalSince(runLastMod)) < 1.0)
+
+        let waiting = try #require(sessions.first(where: { $0.id == "antigravity:ag-timing-waiting" }))
+        #expect(waiting.state == .waitingForUser)
+        // waiting.stateSince must reflect the question ask time (120s ago)
+        #expect(abs(waiting.stateSince.timeIntervalSince(questionTime)) < 1.0)
+
+        // Verify SessionStore behavior
+        let store = SessionStore(adapters: [adapter], maxAgeSeconds: 3600)
+        _ = store.refresh()
+
+        let storeRunning = try #require(store.currentSessions.first(where: { $0.id == "antigravity:ag-timing-running" }))
+        #expect(abs(storeRunning.stateSince.timeIntervalSince(runStart)) < 1.0)
+
+        // Now update DB to completed
+        let finishSQL = "UPDATE conversation_summaries SET status = 'CASCADE_RUN_STATUS_IDLE', not_fully_idle = 0 WHERE conversation_id = 'ag-timing-running';"
+        #expect(sqlite3_exec(db, finishSQL, nil, nil, nil) == SQLITE_OK)
+
+        _ = store.refresh()
+        let completed = try #require(store.currentSessions.first(where: { $0.id == "antigravity:ag-timing-running" }))
+        #expect(completed.state == .completed)
+        #expect(completed.completedDuration != nil)
+        #expect((completed.completedDuration ?? 0) >= 599.0) // accurate 10 minute duration, not 5 seconds!
+    }
+
     // MARK: - SessionStore Tests
 
     private final class MockAdapter: AgentAdapter, @unchecked Sendable {

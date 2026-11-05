@@ -135,13 +135,27 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
                 }
             }
 
+            let stateSince: Date
+            switch state {
+            case .running:
+                var start = row.lastUserInput
+                if start == nil && !row.parentConversationID.isEmpty {
+                    start = (try? transcriptURL.resourceValues(forKeys: [.creationDateKey]))?.creationDate
+                }
+                stateSince = min(now, start ?? lastModified)
+            case .waitingForUser:
+                stateSince = min(now, transcriptInfo.waitingSince ?? lastModified)
+            case .completed, .idle:
+                stateSince = lastModified
+            }
+
             let session = AgentSession(
                 id: "\(kind.rawValue):\(row.conversationId)",
                 kind: kind,
                 title: title,
                 cwd: resolvedCwd,
                 state: state,
-                stateSince: lastModified,
+                stateSince: stateSince,
                 lastActivity: lastModified,
                 detail: detail,
                 detailIsCommand: false,
@@ -168,6 +182,7 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
         let stepCount: Int
         let parentConversationID: String
         let agentName: String
+        let lastUserInput: Date?
     }
 
     public struct DatabaseError: Error, CustomStringConvertible {
@@ -228,8 +243,9 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
         let stepExpr = columns.contains("step_count") ? "step_count" : "0 AS step_count"
         let parentExpr = columns.contains("parent_conversation_id") ? "parent_conversation_id" : "''"
         let nameExpr = columns.contains("agent_name") ? "agent_name" : "''"
+        let userInputExpr = columns.contains("last_user_input_time") ? "last_user_input_time" : "''"
         let query = """
-        SELECT conversation_id, title, preview, workspace_uris, status, not_fully_idle, killed, last_modified_time, \(stepExpr), \(parentExpr), \(nameExpr)
+        SELECT conversation_id, title, preview, workspace_uris, status, not_fully_idle, killed, last_modified_time, \(stepExpr), \(parentExpr), \(nameExpr), \(userInputExpr)
         FROM conversation_summaries
         ORDER BY last_modified_time DESC
         """
@@ -254,6 +270,14 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
             return df
         }()
 
+        let fallbackFormatterOffset: DateFormatter = {
+            let df = DateFormatter()
+            df.locale = Locale(identifier: "en_US_POSIX")
+            df.timeZone = TimeZone(secondsFromGMT: 0)
+            df.dateFormat = "yyyy-MM-dd HH:mm:ssZZZZZ"
+            return df
+        }()
+
         let fallbackFormatterSimple: DateFormatter = {
             let df = DateFormatter()
             df.locale = Locale(identifier: "en_US_POSIX")
@@ -261,6 +285,13 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
             df.dateFormat = "yyyy-MM-dd HH:mm:ss"
             return df
         }()
+
+        func parseDate(_ s: String) -> Date? {
+            dateFormatter.date(from: s)
+                ?? fallbackFormatterWithFraction.date(from: s)
+                ?? fallbackFormatterOffset.date(from: s)
+                ?? fallbackFormatterSimple.date(from: s)
+        }
 
         var rc = sqlite3_step(statement)
         while rc == SQLITE_ROW {
@@ -277,12 +308,18 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
             var modDate: Date? = nil
             if let dateStr = sqlite3_column_text(statement, 7) {
                 let s = String(cString: dateStr)
-                modDate = dateFormatter.date(from: s)
-                    ?? fallbackFormatterWithFraction.date(from: s)
-                    ?? fallbackFormatterSimple.date(from: s)
+                modDate = parseDate(s)
             }
 
             let stepCount = Int(sqlite3_column_int(statement, 8))
+
+            var userInputDate: Date? = nil
+            if let dateStr = sqlite3_column_text(statement, 11) {
+                let s = String(cString: dateStr)
+                if let parsed = parseDate(s), parsed.timeIntervalSince1970 > 1577836800 { // after 2020-01-01
+                    userInputDate = parsed
+                }
+            }
 
             // If date parsing fails, modDate remains nil, row will be skipped in scan()
             rows.append(SummaryRow(
@@ -296,7 +333,8 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
                 lastModified: modDate,
                 stepCount: stepCount,
                 parentConversationID: sqlite3_column_text(statement, 9).map { String(cString: $0) } ?? "",
-                agentName: sqlite3_column_text(statement, 10).map { String(cString: $0) } ?? ""
+                agentName: sqlite3_column_text(statement, 10).map { String(cString: $0) } ?? "",
+                lastUserInput: userInputDate
             ))
         }
         guard rc == SQLITE_DONE else {
@@ -309,6 +347,7 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
     private struct TranscriptInfo {
         var isWaiting: Bool = false
         var waitingText: String? = nil
+        var waitingSince: Date? = nil
         var runningText: String? = nil
         var lastPlannerText: String? = nil
     }
@@ -319,6 +358,12 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
         }
 
         var info = TranscriptInfo()
+        let isoStandard = ISO8601DateFormatter()
+        let isoFraction: ISO8601DateFormatter = {
+            let f = ISO8601DateFormatter()
+            f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            return f
+        }()
 
         for line in lines {
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -328,12 +373,16 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
             }
 
             let type = json["type"] as? String
+            let createdAtStr = json["created_at"] as? String
+            let createdAt = createdAtStr.flatMap { isoStandard.date(from: $0) ?? isoFraction.date(from: $0) }
+
             if type == "PLANNER_RESPONSE" {
                 if let toolCalls = json["tool_calls"] as? [[String: Any]] {
                     for call in toolCalls {
                         let callName = call["tool_name"] as? String ?? call["name"] as? String ?? ""
                         if callName == "ask_question" || callName == "ask_user_question" {
                             info.isWaiting = true
+                            info.waitingSince = createdAt
                             if let args = call["arguments"] as? [String: Any] ?? call["parameters"] as? [String: Any] {
                                 info.waitingText = args["question"] as? String ?? args["prompt"] as? String
                             }
@@ -351,6 +400,7 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
             } else if type == "USER_INPUT" {
                 // User replied, reset waiting state
                 info.isWaiting = false
+                info.waitingSince = nil
             }
         }
 

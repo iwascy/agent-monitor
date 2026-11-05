@@ -145,7 +145,12 @@
 2. **会话日志**：`~/.gemini/antigravity/brain/<id>/.system_generated/logs/transcript.jsonl`
    - 当 `preview == title` 或 preview 为空时，从日志末尾提取最后一条 `PLANNER_RESPONSE` 的 `content` 前 80 字作为详情，避免标题重复显示。
 
-### 5.2 状态判定规则
+### 5.2 状态与计时规则
+- **计时起始时间 (`stateSince`)**：
+  - `running`：读取 `conversation_summaries.db` 中的 `last_user_input_time` 作为本轮运行起始时间；子代理无用户输入时读取 transcript 文件的创建时间。杜绝使用每步刷新的 `last_modified_time` 导致计时被反复重置。
+  - `waitingForUser`：从 transcript 日志末尾提取 `ask_question` 的 `created_at`，精准反映等待用户回复的时长。
+  - `idle` / `completed`：使用最后一步完成时的 `last_modified_time`。
+- **最近活跃时间 (`lastActivity`)**：取 `last_modified_time`，反映最近一次步骤或工具执行时间。
 - `CASCADE_RUN_STATUS_RUNNING` 且日志末尾有未完成的 `ask_question`：判定为 **`waitingForUser`**（"在问你"）。
 - `CASCADE_RUN_STATUS_RUNNING` 且无提问：判定为 **`running`**。
 - `CASCADE_RUN_STATUS_IDLE`：Adapter 报告 **`idle`**（由 SessionStore 负责升级为 completed）。
