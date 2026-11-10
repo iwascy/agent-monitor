@@ -91,7 +91,17 @@ struct SessionNavigationTests {
                 "https://127.0.0.1:57445/c/\(uuid)")
         #expect(!AntigravityConnection.isHubPage(type: "webview", url: current.absoluteString))
         #expect(!AntigravityConnection.isHubPage(type: "page", url: "http://localhost:1234/plugin/index.html"))
+        #expect(AntigravityConnection.isHubPage(type: "page", url: "https://127.0.0.1:57445/history"))
+        #expect(AntigravityConnection.isHubPage(type: "page", url: "https://127.0.0.1:57445/sidecars/abc"))
+        #expect(AntigravityConnection.isHubPage(type: "page", url: "https://127.0.0.1:57445/battle/abc"))
         #expect(AntigravityConnection.conversationURL(current: current, nativeID: "../new") == nil)
+
+        let target = AntigravityConnection.conversationURL(current: current, nativeID: uuid)!
+        let expr = AntigravityConnection.clientNavigationExpression(target: target)
+        #expect(expr?.contains("\"/c/\(uuid)?platform=electron\"") == true)
+        #expect(expr?.contains("\"/c/\(uuid)\"") == true)
+        #expect(expr?.contains("window.history.pushState") == true)
+        #expect(AntigravityConnection.clientNavigationExpression(target: URL(string: "https://127.0.0.1:57445/history")!) == nil)
     }
 
     @Test("Warp environment parsing extracts UUID, focus URL, and legacy ID")
