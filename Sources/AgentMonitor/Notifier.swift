@@ -107,8 +107,15 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         switch transition {
         case .added(let s), .stateChanged(let s, _, _):
             session = s
-        case .removed:
+        case .removed(let id):
+            removeWaitingNotifications(for: id)
             return
+        }
+
+        if case .stateChanged(let s, let fromState, let toState) = transition,
+           fromState == .waitingForUser,
+           toState != .waitingForUser {
+            removeWaitingNotifications(for: s.id)
         }
 
         guard NotificationPolicy.shouldNotify(
@@ -180,8 +187,12 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             }
         }
 
+        let identifier = session.state == .waitingForUser
+            ? "\(session.id)-waiting"
+            : "\(session.id)-\(Int(now.timeIntervalSince1970))"
+
         let request = UNNotificationRequest(
-            identifier: "\(session.id)-\(Int(now.timeIntervalSince1970))",
+            identifier: identifier,
             content: content,
             trigger: nil // immediate delivery
         )
@@ -196,6 +207,14 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
                 NSLog("Failed to deliver notification: %@", error.localizedDescription)
             }
         }
+    }
+
+    private func removeWaitingNotifications(for sessionId: String) {
+        guard Bundle.main.bundleIdentifier != nil else { return }
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [
+            "\(sessionId)-waiting",
+            "\(sessionId)-remind"
+        ])
     }
 
     public func sendReminder(for session: AgentSession, index: Int) {

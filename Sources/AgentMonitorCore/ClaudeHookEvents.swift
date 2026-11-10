@@ -168,12 +168,19 @@ public final class ClaudeHookEventReader: @unchecked Sendable {
 
     private func parseLine(_ line: String) {
         // 格式：<unix 秒>\t<hook 的 stdin JSON>
-        guard let tabIndex = line.firstIndex(of: "\t") else {
+        // 兼容旧版脚本并发追加产生交错的 `<ts1>\t<ts2>\t{...}` 行：取最后一个 \t 切分出 JSON 与其紧邻时间戳
+        guard let lastTabIndex = line.lastIndex(of: "\t") else {
             return
         }
 
-        let timeStr = String(line[..<tabIndex])
-        let jsonStr = String(line[line.index(after: tabIndex)...])
+        let prefixPart = line[..<lastTabIndex]
+        let timeStr: String
+        if let prevTab = prefixPart.lastIndex(of: "\t") {
+            timeStr = String(prefixPart[prefixPart.index(after: prevTab)...])
+        } else {
+            timeStr = String(prefixPart)
+        }
+        let jsonStr = String(line[line.index(after: lastTabIndex)...])
 
         guard let timestamp = Double(timeStr) else {
             return

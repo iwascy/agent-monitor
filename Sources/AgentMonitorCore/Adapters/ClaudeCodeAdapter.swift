@@ -151,65 +151,112 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
             }
 
             if status == "waiting" {
-                state = .waitingForUser
-                if waitingFor == "input needed" {
+                if waitingFor == "dialog open" {
+                    // 本地斜杠命令面板（如 /usage、/model、/status）或非阻塞提示弹窗，并非等待工具授权
+                    state = .idle
+                    detail = transcriptSummary?.lastAssistantText
+                } else if waitingFor == "input needed" {
+                    state = .waitingForUser
                     waitingLabel = "在问你"
+                    detail = transcriptSummary?.pendingToolDetail ?? transcriptSummary?.lastAssistantText
+                    detailIsCommand = transcriptSummary?.isCommand ?? false
+                } else if (waitingFor == "permission prompt" || waitingFor == nil),
+                          let ts = transcriptSummary, ts.hasContent,
+                          (!ts.hasPendingToolUse || (ts.permissionMode == "bypassPermissions" && !ts.isUserQuestion)) {
+                    // 1) transcript 中无未闭合 tool_use 时，说明是 local_jsx 等非工具弹窗因默认映射回退成了 permission prompt
+                    // 2) bypassPermissions 免授权模式下不会停在工具授权弹窗，若无 Hook 印证则按实际运行/空闲状态处理
+                    if ts.hasPendingToolUse {
+                        state = .running
+                        detail = ts.runningDetail ?? "正在思考…"
+                    } else {
+                        state = .idle
+                        detail = ts.lastAssistantText
+                    }
                 } else {
+                    state = .waitingForUser
                     waitingLabel = "等待授权"
+                    detail = transcriptSummary?.pendingToolDetail ?? transcriptSummary?.lastAssistantText
+                    detailIsCommand = transcriptSummary?.isCommand ?? false
                 }
-                detail = transcriptSummary?.pendingToolDetail ?? transcriptSummary?.lastAssistantText
-                detailIsCommand = transcriptSummary?.isCommand ?? false
             } else if status == "busy" {
                 state = .running
                 detail = transcriptSummary?.runningDetail ?? "正在思考…"
-            } else if status == "idle" {
+            } else if status == "idle" || status == "shell" {
+                // "shell" 表示主轮次已空闲、仅有后台 local_bash 任务驻留，绝不能落入缺失 status 的启发式分支误报等待授权
                 state = .idle
                 detail = transcriptSummary?.lastAssistantText
-            } else {
-                // Fallback when status field is missing: check transcript for pending tool use
+            } else if status == nil {
+                // 仅在旧版或刚启动缺失 status 字段时回退检查 transcript 中的未闭合 tool_use
                 if let ts = transcriptSummary, ts.hasPendingToolUse {
-                    let transcriptMtime = (try? transcriptURL?.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? updatedAt
-                    if now.timeIntervalSince(transcriptMtime) >= waitingThreshold {
-                        state = .waitingForUser
-                        waitingLabel = ts.isUserQuestion ? "在问你" : "等待授权"
-                        detail = ts.pendingToolDetail
-                        detailIsCommand = ts.isCommand
-                    } else {
+                    if (ts.permissionMode == "bypassPermissions" || ts.isBackgroundOrSubagentTool) && !ts.isUserQuestion {
                         state = .running
                         detail = ts.runningDetail ?? "正在思考…"
+                    } else {
+                        let transcriptMtime = (try? transcriptURL?.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? updatedAt
+                        if now.timeIntervalSince(transcriptMtime) >= waitingThreshold {
+                            state = .waitingForUser
+                            waitingLabel = ts.isUserQuestion ? "在问你" : "等待授权"
+                            detail = ts.pendingToolDetail
+                            detailIsCommand = ts.isCommand
+                        } else {
+                            state = .running
+                            detail = ts.runningDetail ?? "正在思考…"
+                        }
                     }
                 } else {
                     state = .idle
                     detail = transcriptSummary?.lastAssistantText
                 }
+            } else {
+                // 其他未知非空状态值保守视为运行中，不触发等待授权误报
+                state = .running
+                detail = transcriptSummary?.runningDetail ?? "正在思考…"
             }
 
             var suppressCompletion = false
 
             // Hook 状态覆盖判定
             if let hook = hookState {
-                let thresholdDate: Date
+                let statusDate: Date
                 if let su = sessionMeta.statusUpdatedAt {
-                    thresholdDate = Date(timeIntervalSince1970: Double(su) / 1000.0 - 1.0)
+                    statusDate = Date(timeIntervalSince1970: Double(su) / 1000.0)
                 } else {
-                    thresholdDate = updatedAt.addingTimeInterval(-1.0)
+                    statusDate = updatedAt
                 }
+                let thresholdDate = statusDate.addingTimeInterval(-1.0)
+                let transcriptMtime = try? transcriptURL?.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
 
-                if hook.at > thresholdDate {
-                    switch hook.event {
-                    case "PermissionRequest":
+                // 等待类 Hook 有效性判定：
+                // - 若 <pid>.json 当前就是 waiting（非 dialog open），允许同秒内（statusDate - 1s）的 Hook 补充详情；
+                // - 若 <pid>.json 当前已变为 busy / idle / shell，由于 hook.at 是秒级向下取整（恒 <= 实际触发时间），
+                //   一旦权限获批后更新了 statusUpdatedAt（即使在同一秒内），statusDate 必然 >= hook.at；
+                //   此时只有 hook.at > statusDate（Hook 比状态更新时间更新）且 transcript 未在 Hook 后完成工具调用，才允许覆盖。
+                let isCurrentlyWaiting = (status == "waiting" && waitingFor != "dialog open")
+                let transcriptProgressedPastHook: Bool = {
+                    guard let tm = transcriptMtime, tm > hook.at.addingTimeInterval(1.0) else { return false }
+                    return transcriptSummary?.hasPendingToolUse == false
+                }()
+                let canOverrideWithWaitingHook = isCurrentlyWaiting
+                    ? (hook.at >= thresholdDate)
+                    : (hook.at > statusDate && !transcriptProgressedPastHook)
+
+                switch hook.event {
+                case "PermissionRequest":
+                    if canOverrideWithWaitingHook {
                         state = .waitingForUser
                         waitingLabel = "等待授权"
-                        detail = hook.toolDetail
+                        detail = hook.toolDetail ?? detail
                         detailIsCommand = hook.detailIsCommand
                         if hook.at > updatedAt {
                             updatedAt = hook.at
                         }
-                    case "Notification":
+                    }
+                case "Notification":
+                    if canOverrideWithWaitingHook {
                         if hook.notificationType == "permission_prompt" {
                             state = .waitingForUser
                             waitingLabel = "等待授权"
-                            detail = hook.message
+                            detail = hook.message ?? detail
                             detailIsCommand = false
                             if hook.at > updatedAt {
                                 updatedAt = hook.at
@@ -217,28 +264,32 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
                         } else if hook.notificationType == "elicitation_dialog" || hook.notificationType == "agent_needs_input" {
                             state = .waitingForUser
                             waitingLabel = "在问你"
-                            detail = hook.message
+                            detail = hook.message ?? detail
                             detailIsCommand = false
                             if hook.at > updatedAt {
                                 updatedAt = hook.at
                             }
                         }
-                    case "Stop":
+                    }
+                case "Stop":
+                    if hook.at > thresholdDate {
                         state = .idle
                         // 不覆盖 detail
                         if hook.at > updatedAt {
                             updatedAt = hook.at
                         }
-                    case "StopFailure":
+                    }
+                case "StopFailure":
+                    if hook.at > thresholdDate {
                         state = .idle
                         suppressCompletion = true
                         if hook.at > updatedAt {
                             updatedAt = hook.at
                         }
-                    default:
-                        // UserPromptSubmit, SessionStart, SessionEnd 等不覆盖
-                        break
                     }
+                default:
+                    // UserPromptSubmit, SessionStart, SessionEnd 等不覆盖
+                    break
                 }
             }
 
@@ -323,10 +374,13 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
     }
 
     private struct TranscriptSummary {
+        var hasContent: Bool = false
         var customTitle: String?
+        var permissionMode: String?
         var hasPendingToolUse: Bool = false
         var isUserQuestion: Bool = false
         var isCommand: Bool = false
+        var isBackgroundOrSubagentTool: Bool = false
         var pendingToolDetail: String?
         var runningDetail: String?
         var lastAssistantText: String?
@@ -339,7 +393,7 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
 
         var summary = TranscriptSummary()
         var pendingToolOrder: [String] = []
-        var pendingToolUses: [String: (name: String, detail: String, isCmd: Bool, isQuestion: Bool)] = [:]
+        var pendingToolUses: [String: (name: String, detail: String, isCmd: Bool, isQuestion: Bool, isBgOrSubagent: Bool)] = [:]
 
         for line in lines {
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -348,10 +402,23 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
                 continue
             }
 
+            summary.hasContent = true
             let type = json["type"] as? String
 
             if type == "custom-title", let ct = json["customTitle"] as? String, !ct.isEmpty {
                 summary.customTitle = ct
+            } else if type == "permission-mode", let pm = json["permissionMode"] as? String, !pm.isEmpty {
+                summary.permissionMode = pm
+            } else if type == "mode", let m = json["mode"] as? String, m == "bypassPermissions" {
+                summary.permissionMode = m
+            } else if type == "system" {
+                let subtype = json["subtype"] as? String
+                if subtype == "turn_duration" || subtype == "stop_hook_summary" {
+                    // 轮次已明确结束，清理任何被中断而未产生 tool_result 的残留 tool_use
+                    pendingToolUses.removeAll()
+                    pendingToolOrder.removeAll()
+                    summary.runningDetail = nil
+                }
             }
 
             if type == "assistant" {
@@ -364,15 +431,19 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
                             let name = item["name"] as? String ?? "Tool"
                             var isCmd = false
                             var isQuestion = false
+                            var isBgOrSubagent = (name == "Agent" || name == "Task")
                             var toolDetail = name
 
                             if let input = item["input"] as? [String: Any] {
+                                if input["run_in_background"] as? Bool == true {
+                                    isBgOrSubagent = true
+                                }
                                 if let cmd = input["command"] as? String ?? input["cmd"] as? String {
                                     toolDetail = cmd
                                     isCmd = true
                                 } else if let question = input["question"] as? String ?? input["prompt"] as? String {
                                     toolDetail = question
-                                    isQuestion = true
+                                    isQuestion = (name == "AskUserQuestion" || name == "ask_user" || !isBgOrSubagent)
                                 } else if let path = input["path"] as? String ?? input["file_path"] as? String {
                                     toolDetail = "\(name) \(path)"
                                 }
@@ -381,7 +452,7 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
                             if pendingToolUses[toolId] == nil {
                                 pendingToolOrder.append(toolId)
                             }
-                            pendingToolUses[toolId] = (name, toolDetail, isCmd, isQuestion)
+                            pendingToolUses[toolId] = (name, toolDetail, isCmd, isQuestion, isBgOrSubagent)
                             summary.runningDetail = "正在运行 \(name) · \(toolDetail)"
                         } else if itemType == "text", let text = item["text"] as? String {
                             let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -392,14 +463,27 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
                     }
                 }
             } else if type == "user" {
-                if let message = json["message"] as? [String: Any],
-                   let content = message["content"] as? [[String: Any]] {
-                    for item in content {
-                        if item["type"] as? String == "tool_result",
-                           let toolUseId = item["tool_use_id"] as? String {
-                            pendingToolUses.removeValue(forKey: toolUseId)
-                            pendingToolOrder.removeAll { $0 == toolUseId }
+                if let message = json["message"] as? [String: Any] {
+                    if let content = message["content"] as? [[String: Any]] {
+                        var hasToolResult = false
+                        for item in content {
+                            if item["type"] as? String == "tool_result",
+                               let toolUseId = item["tool_use_id"] as? String {
+                                hasToolResult = true
+                                pendingToolUses.removeValue(forKey: toolUseId)
+                                pendingToolOrder.removeAll { $0 == toolUseId }
+                            }
                         }
+                        if !hasToolResult && !content.isEmpty {
+                            // 用户发起了新一轮非 tool_result 消息，此前被中断的 tool_use 已失效
+                            pendingToolUses.removeAll()
+                            pendingToolOrder.removeAll()
+                        }
+                    } else if let text = message["content"] as? String,
+                              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                              !text.contains("<task-notification>") {
+                        pendingToolUses.removeAll()
+                        pendingToolOrder.removeAll()
                     }
                 }
             }
@@ -410,6 +494,7 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
             summary.pendingToolDetail = lastPending.detail
             summary.isCommand = lastPending.isCmd
             summary.isUserQuestion = lastPending.isQuestion
+            summary.isBackgroundOrSubagentTool = lastPending.isBgOrSubagent
         }
 
         return summary

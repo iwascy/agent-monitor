@@ -655,4 +655,217 @@ struct ClaudeHookTests {
         #expect(sessions.first?.transcriptPath == hookTranscriptURL.path)
         #expect(sessions.first?.title == "TitleFromHookTranscript")
     }
+
+    // MARK: - 误弹权限通知回归测试
+
+    @Test("ClaudeCodeAdapter: status 为 shell 或 waiting(dialog open) 时绝不误判为等待授权")
+    func testShellStatusAndDialogOpenDoNotFalseAlert() throws {
+        let tempDir = createTempDir()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let sessionsDir = tempDir.appendingPathComponent("sessions")
+        let projectsDir = tempDir.appendingPathComponent("projects")
+        let eventsDir = tempDir.appendingPathComponent("events")
+        try FileManager.default.createDirectory(at: sessionsDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: projectsDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: eventsDir, withIntermediateDirectories: true)
+
+        let slug = tempDir.path.replacingOccurrences(of: "[^A-Za-z0-9]", with: "-", options: .regularExpression)
+        let projectDir = projectsDir.appendingPathComponent(slug)
+        try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
+
+        let sessionId = "session-shell-dialog"
+        let transcriptURL = projectDir.appendingPathComponent("\(sessionId).jsonl")
+        let transcriptContent = """
+        {"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"sleep 30"}}]}}
+        """
+        try transcriptContent.data(using: .utf8)!.write(to: transcriptURL)
+        // 将 transcript 修改时间设为 10 秒前，模拟超过 waitingThreshold
+        let oldDate = Date().addingTimeInterval(-10)
+        try FileManager.default.setAttributes([.modificationDate: oldDate], ofItemAtPath: transcriptURL.path)
+
+        let adapter = ClaudeCodeAdapter(
+            sessionsDirectory: sessionsDir,
+            projectsDirectory: projectsDir,
+            eventsDirectory: eventsDir,
+            isPidAlive: { _ in true },
+            maxAgeSeconds: 3600,
+            waitingThreshold: 0.0
+        )
+
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+
+        // 1. status == "shell"（后台 local_bash 运行中）：不应落入缺失 status 分支误判为 waitingForUser
+        let shellJSON = """
+        {
+            "pid": 20001,
+            "sessionId": "\(sessionId)",
+            "cwd": "\(tempDir.path)",
+            "status": "shell",
+            "updatedAt": \(nowMs),
+            "statusUpdatedAt": \(nowMs)
+        }
+        """
+        let sessionFile = sessionsDir.appendingPathComponent("20001.json")
+        try shellJSON.data(using: .utf8)!.write(to: sessionFile)
+
+        var sessions = try adapter.scan()
+        #expect(sessions.count == 1)
+        #expect(sessions.first?.state == .idle)
+        #expect(sessions.first?.waitingLabel == nil)
+
+        // 2. status == "waiting" 且 waitingFor == "dialog open"（斜杠命令面板或非阻塞提示框）：不应误判为等待授权
+        let dialogOpenJSON = """
+        {
+            "pid": 20001,
+            "sessionId": "\(sessionId)",
+            "cwd": "\(tempDir.path)",
+            "status": "waiting",
+            "waitingFor": "dialog open",
+            "updatedAt": \(nowMs),
+            "statusUpdatedAt": \(nowMs)
+        }
+        """
+        try dialogOpenJSON.data(using: .utf8)!.write(to: sessionFile)
+
+        sessions = try adapter.scan()
+        #expect(sessions.count == 1)
+        #expect(sessions.first?.state == .idle)
+        #expect(sessions.first?.waitingLabel == nil)
+    }
+
+    @Test("ClaudeCodeAdapter: 同秒内批准权限恢复 busy 后，旧 PermissionRequest 不再反向覆盖为 waitingForUser")
+    func testSameSecondPermissionApprovalDoesNotStickAsWaiting() throws {
+        let tempDir = createTempDir()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let sessionsDir = tempDir.appendingPathComponent("sessions")
+        let projectsDir = tempDir.appendingPathComponent("projects")
+        let eventsDir = tempDir.appendingPathComponent("events")
+        try FileManager.default.createDirectory(at: sessionsDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: projectsDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: eventsDir, withIntermediateDirectories: true)
+
+        let tsvURL = eventsDir.appendingPathComponent("claude.tsv")
+        let hookReader = ClaudeHookEventReader(fileURL: tsvURL)
+
+        let adapter = ClaudeCodeAdapter(
+            sessionsDirectory: sessionsDir,
+            projectsDirectory: projectsDir,
+            eventsDirectory: eventsDir,
+            hookReader: hookReader,
+            isPidAlive: { _ in true },
+            maxAgeSeconds: 3600
+        )
+
+        let baseSec = Int(Date().timeIntervalSince1970)
+        // PermissionRequest 发生在 baseSec.200s（tsv 记录为整秒 baseSec），用户在同秒 baseSec.600s 批准恢复 busy
+        let approvedMs = Int64(baseSec) * 1000 + 600
+        let sessionId = "session-same-sec-approve"
+
+        let sessionJSON = """
+        {
+            "pid": 20002,
+            "sessionId": "\(sessionId)",
+            "cwd": "\(tempDir.path)",
+            "status": "busy",
+            "updatedAt": \(approvedMs),
+            "statusUpdatedAt": \(approvedMs)
+        }
+        """
+        try sessionJSON.data(using: .utf8)!.write(to: sessionsDir.appendingPathComponent("20002.json"))
+
+        let hookLine = "\(baseSec)\t{\"session_id\":\"\(sessionId)\",\"hook_event_name\":\"PermissionRequest\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"swift test\"}}\n"
+        try appendLine(hookLine, to: tsvURL)
+
+        let sessions = try adapter.scan()
+        #expect(sessions.count == 1)
+        #expect(sessions.first?.state == .running)
+        #expect(sessions.first?.waitingLabel == nil)
+    }
+
+    @Test("ClaudeCodeAdapter: bypassPermissions 模式或无未闭合 tool_use 时抑制虚假 permission prompt")
+    func testBypassPermissionsAndClosedToolUseSuppressFalseWaiting() throws {
+        let tempDir = createTempDir()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let sessionsDir = tempDir.appendingPathComponent("sessions")
+        let projectsDir = tempDir.appendingPathComponent("projects")
+        let eventsDir = tempDir.appendingPathComponent("events")
+        try FileManager.default.createDirectory(at: sessionsDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: projectsDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: eventsDir, withIntermediateDirectories: true)
+
+        let slug = tempDir.path.replacingOccurrences(of: "[^A-Za-z0-9]", with: "-", options: .regularExpression)
+        let projectDir = projectsDir.appendingPathComponent(slug)
+        try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
+
+        let sessionId = "session-bypass"
+        let transcriptURL = projectDir.appendingPathComponent("\(sessionId).jsonl")
+        let transcriptContent = """
+        {"type":"permission-mode","permissionMode":"bypassPermissions","sessionId":"\(sessionId)"}
+        {"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"go test ./..."}}]}}
+        """
+        try transcriptContent.data(using: .utf8)!.write(to: transcriptURL)
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-15)], ofItemAtPath: transcriptURL.path)
+
+        let adapter = ClaudeCodeAdapter(
+            sessionsDirectory: sessionsDir,
+            projectsDirectory: projectsDir,
+            eventsDirectory: eventsDir,
+            isPidAlive: { _ in true },
+            maxAgeSeconds: 3600,
+            waitingThreshold: 0.0
+        )
+
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+
+        // 1. 缺失 status 字段但在 bypassPermissions 模式下运行长耗时命令：应为 running 而非 waitingForUser
+        let missingStatusJSON = """
+        {
+            "pid": 20003,
+            "sessionId": "\(sessionId)",
+            "cwd": "\(tempDir.path)",
+            "updatedAt": \(nowMs)
+        }
+        """
+        let sessionFile = sessionsDir.appendingPathComponent("20003.json")
+        try missingStatusJSON.data(using: .utf8)!.write(to: sessionFile)
+
+        var sessions = try adapter.scan()
+        #expect(sessions.first?.state == .running)
+
+        // 2. local_jsx 面板因默认映射写入 waiting + permission prompt，但处于 bypassPermissions 且无 Hook：不误报 waitingForUser
+        let falsePromptJSON = """
+        {
+            "pid": 20003,
+            "sessionId": "\(sessionId)",
+            "cwd": "\(tempDir.path)",
+            "status": "waiting",
+            "waitingFor": "permission prompt",
+            "updatedAt": \(nowMs),
+            "statusUpdatedAt": \(nowMs)
+        }
+        """
+        try falsePromptJSON.data(using: .utf8)!.write(to: sessionFile)
+
+        sessions = try adapter.scan()
+        #expect(sessions.first?.state == .running)
+    }
+
+    @Test("ClaudeHookEventReader: 兼容旧版并发交错的雙时间戳行")
+    func testReaderHandlesInterleavedTimestampLine() throws {
+        let tempDir = createTempDir()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let tsvURL = tempDir.appendingPathComponent("claude.tsv")
+        let reader = ClaudeHookEventReader(fileURL: tsvURL)
+
+        let interleaved = "1793940084\t1793940085\t{\"session_id\":\"s-interleaved\",\"hook_event_name\":\"Stop\"}\n"
+        try interleaved.data(using: .utf8)!.write(to: tsvURL)
+
+        let states = reader.poll()
+        #expect(states["s-interleaved"]?.event == "Stop")
+        #expect(states["s-interleaved"]?.at == Date(timeIntervalSince1970: 1793940085))
+    }
 }

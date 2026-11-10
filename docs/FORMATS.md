@@ -40,13 +40,14 @@
 - **存活性**：使用 POSIX `kill(pid, 0)` 检测进程是否存在。若返回非 0（`ESRCH`），判定进程已死亡，忽略该会话文件。
 
 ### 2.3 状态判定规则
-- **`status == "waiting"`**：映射为 **`waitingForUser`**。
-  - 若 `waitingFor == "input needed"`，标签为 `"在问你"`。
-  - 其他取值（`"sandbox request"` 等），标签为 `"等待授权"`。
+- **`status == "waiting"`**：
+  - 若 `waitingFor == "dialog open"`（打开本地斜杠命令如 `/usage`、`/model`、`/status` 或非阻塞提示弹窗），映射为 **`idle`**，不触发授权等待通知。
+  - 若 `waitingFor == "input needed"`，映射为 **`waitingForUser`**，标签为 `"在问你"`。
+  - 其他取值（`"permission prompt"`、`"sandbox request"`、`"worker request"`、`"goal proposal"` 等），映射为 **`waitingForUser`**，标签为 `"等待授权"`（若 `waitingFor == "permission prompt"` 但处于 `bypassPermissions` 免授权模式或 transcript 末尾无未闭合 `tool_use` 且无 Hook 印证，按实际运行/空闲状态处理，避免本地 JSX 面板默认映射造成误报）。
   - 详情从 transcript 中按**出现先后顺序**提取最后一个未响应的 `tool_use`。
 - **`status == "busy"`**：映射为 **`running`**。
-- **`status == "idle"`**：Adapter 报告 **`idle`**（由 `SessionStore` 识别 running -> idle 转换后升级为 `completed`）。
-- **兜底**：仅在 `status` 字段缺失时，才使用“5 秒无新内容且存在未闭合 tool_use”作为启发式兜底。
+- **`status == "idle"` 或 `"shell"`**：Adapter 报告 **`idle`**（`"shell"` 表示主轮次已空闲、仅有后台 `local_bash` 任务驻留，绝不落入缺失 `status` 的兜底分支；由 `SessionStore` 识别 running -> idle 转换后升级为 `completed`）。
+- **兜底**：仅在 `status` 字段为 `nil` 时，才对非 `bypassPermissions` 且非后台/子代理的未闭合 `tool_use` 使用“5 秒无新内容”作为启发式兜底。
 
 ### 2.4 脱敏数据片段示例
 `~/.claude/sessions/45990.json`:
