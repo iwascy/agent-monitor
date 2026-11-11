@@ -98,17 +98,19 @@ final class SessionNavigator {
     }
 }
 
-@MainActor
 private enum AntigravitySessionNavigator {
     static func focus(processID: pid_t, nativeID: String) async -> Bool {
-        let app = AXUIElementCreateApplication(processID)
-        AXUIElementSetMessagingTimeout(app, 0.25)
-        // Wait for a newly opened Electron window to publish its AX tree.
-        for _ in 0..<8 {
-            if pressConversation(in: app, nativeID: nativeID) { return true }
-            try? await Task.sleep(for: .milliseconds(150))
-        }
-        return false
+        // 将跨进程 AX IPC 树遍历放到后台线程，避免阻塞主线程 UI 响应
+        await Task.detached(priority: .userInitiated) {
+            let app = AXUIElementCreateApplication(processID)
+            AXUIElementSetMessagingTimeout(app, 0.25)
+            // Wait for a newly opened Electron window to publish its AX tree.
+            for _ in 0..<8 {
+                if pressConversation(in: app, nativeID: nativeID) { return true }
+                try? await Task.sleep(for: .milliseconds(150))
+            }
+            return false
+        }.value
     }
 
     private static func pressConversation(in app: AXUIElement, nativeID: String) -> Bool {

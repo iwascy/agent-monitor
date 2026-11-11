@@ -18,8 +18,17 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
     public var showUsage: Bool
     public var usageTracker: UsageTracker
 
+    private struct DirCacheEntry {
+        let stamp: FileStamp
+        let subdirs: [URL]
+        let rolloutFiles: [URL]
+    }
+
     private var metaCache: [String: SessionMeta] = [:]
-    private let metaCacheLock = NSLock()
+    private var indexCache: (stamp: FileStamp, offset: UInt64, head: Data, names: [String: String])?
+    private var dirCache: [String: DirCacheEntry] = [:]
+    private var rolloutCache: [String: (stamp: FileStamp, summary: RolloutSummary)] = [:]
+    private let cacheLock = NSLock()
 
     public init(
         sessionsDirectory: URL? = nil,
@@ -44,43 +53,28 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
     }
 
     public func scan() throws -> [AgentSession] {
-        let fm = FileManager.default
         let now = Date()
 
-        // 1. Load session_index.jsonl
-        var threadNames: [String: String] = [:]
-        if fm.fileExists(atPath: sessionIndexURL.path),
-           let indexContent = try? String(contentsOf: sessionIndexURL, encoding: .utf8) {
-            for line in indexContent.components(separatedBy: .newlines) {
-                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8),
-                      let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let id = obj["id"] as? String,
-                      let name = obj["thread_name"] as? String else {
-                    continue
-                }
-                threadNames[id] = name
-            }
-        }
+        // 1. Load session_index.jsonl（带增量偏移与文件快照缓存）
+        let threadNames = loadThreadNames()
 
-        // 2. Discover all rollout files in sessions directory
-        guard fm.fileExists(atPath: sessionsDirectory.path) else {
+        // 2. Discover active rollout files in sessions directory（目录快照缓存 + 快速 stat 过滤）
+        guard FileUtils.fastStat(path: sessionsDirectory.path)?.isDirectory == true else {
             return []
         }
 
-        let rolloutURLs = discoverRolloutFiles()
+        let activeRollouts = discoverActiveRolloutFiles(now: now)
         var results: [AgentSession] = []
+        var activePaths = Set<String>()
 
-        for fileURL in rolloutURLs {
-            let mtime = (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? now
-            if now.timeIntervalSince(mtime) > maxAgeSeconds {
-                continue
-            }
+        for (fileURL, stamp) in activeRollouts {
+            let mtime = stamp.modificationDate
+            activePaths.insert(fileURL.path)
 
             let meta = sessionMeta(fileURL: fileURL)
             // Guardian reviews and other child agents are implementation details of the parent turn.
             // Their session_id can be the parent's ID; merging them would overwrite its live state.
-            guard !meta.isSubagent, let summary = parseRollout(fileURL: fileURL) else {
+            guard !meta.isSubagent, let summary = cachedParseRollout(fileURL: fileURL, stamp: stamp) else {
                 continue
             }
 
@@ -142,16 +136,97 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
             results.append(session)
         }
 
+        pruneCachesIfNeeded(activePaths: activePaths)
         return results
     }
 
+    private func loadThreadNames() -> [String: String] {
+        let indexPath = sessionIndexURL.path
+        guard let stamp = FileUtils.fastStat(path: indexPath) else {
+            cacheLock.lock()
+            indexCache = nil
+            cacheLock.unlock()
+            return [:]
+        }
+
+        cacheLock.lock()
+        let existing = indexCache
+        cacheLock.unlock()
+
+        if let existing, existing.stamp == stamp {
+            return existing.names
+        }
+
+        guard let handle = try? FileHandle(forReadingFrom: sessionIndexURL) else {
+            return existing?.names ?? [:]
+        }
+        defer { try? handle.close() }
+
+        let head = (try? handle.read(upToCount: 64)) ?? Data()
+        let currentSize = UInt64(max(0, stamp.size))
+
+        var names: [String: String]
+        var offset: UInt64
+
+        // 若文件头部未变且大小单调增长，只增量解析追加的尾部字节
+        if let existing, !existing.head.isEmpty, existing.head == head, currentSize >= existing.offset {
+            names = existing.names
+            offset = existing.offset
+        } else {
+            names = [:]
+            offset = 0
+        }
+
+        if currentSize > offset {
+            do {
+                try handle.seek(toOffset: offset)
+                let chunk = handle.readDataToEndOfFile()
+                if let lastNL = chunk.lastIndex(of: 0x0A) {
+                    let validSlice = chunk[chunk.startIndex...lastNL]
+                    var lineStart = validSlice.startIndex
+                    for idx in validSlice.indices where validSlice[idx] == 0x0A {
+                        let lineBytes = validSlice[lineStart..<idx]
+                        lineStart = validSlice.index(after: idx)
+                        if !lineBytes.isEmpty,
+                           let obj = try? JSONSerialization.jsonObject(with: Data(lineBytes)) as? [String: Any],
+                           let id = obj["id"] as? String,
+                           let name = obj["thread_name"] as? String {
+                            names[id] = name
+                        }
+                    }
+                    offset += UInt64(validSlice.count)
+                } else if let text = String(data: chunk, encoding: .utf8) {
+                    // 兼容末尾无换行符的小体积索引文件（如测试 fixture）
+                    for line in text.components(separatedBy: .newlines) {
+                        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8),
+                              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                              let id = obj["id"] as? String,
+                              let name = obj["thread_name"] as? String else {
+                            continue
+                        }
+                        names[id] = name
+                    }
+                    offset = currentSize
+                }
+            } catch {
+                return names
+            }
+        }
+
+        cacheLock.lock()
+        indexCache = (stamp: stamp, offset: offset, head: head, names: names)
+        cacheLock.unlock()
+        return names
+    }
+
     private func sessionMeta(fileURL: URL) -> SessionMeta {
-        metaCacheLock.lock()
+        cacheLock.lock()
         if let cached = metaCache[fileURL.path] {
-            metaCacheLock.unlock()
+            cacheLock.unlock()
             return cached
         }
-        metaCacheLock.unlock()
+        cacheLock.unlock()
 
         // The first line may still be being written; don't cache until it is complete.
         guard let line = FileUtils.readFirstLine(fileURL: fileURL, maxBytes: 1 << 20) else {
@@ -173,29 +248,88 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
             return result
         }
 
-        metaCacheLock.lock()
+        cacheLock.lock()
         metaCache[fileURL.path] = result
-        metaCacheLock.unlock()
+        cacheLock.unlock()
         return result
     }
 
-    private func discoverRolloutFiles() -> [URL] {
+    /// 结合目录级 mtime 缓存与轻量 POSIX `stat` 发现处于活跃时间窗口内的 rollout 文件。
+    private func discoverActiveRolloutFiles(now: Date) -> [(url: URL, stamp: FileStamp)] {
         let fm = FileManager.default
-        guard let enumerator = fm.enumerator(
-            at: sessionsDirectory,
-            includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return []
-        }
+        var stack: [URL] = [sessionsDirectory]
+        var activeFiles: [(url: URL, stamp: FileStamp)] = []
+        var visitedDirs = Set<String>()
 
-        var files: [URL] = []
-        for case let fileURL as URL in enumerator {
-            if fileURL.pathExtension == "jsonl" && fileURL.lastPathComponent.hasPrefix("rollout-") {
-                files.append(fileURL)
+        while let dirURL = stack.popLast() {
+            let dirPath = dirURL.path
+            guard visitedDirs.insert(dirPath).inserted,
+                  let dirStamp = FileUtils.fastStat(path: dirPath),
+                  dirStamp.isDirectory else {
+                continue
+            }
+
+            let entry: DirCacheEntry
+            cacheLock.lock()
+            let cachedDir = dirCache[dirPath]
+            cacheLock.unlock()
+
+            if let cachedDir, cachedDir.stamp == dirStamp {
+                entry = cachedDir
+            } else {
+                let children = (try? fm.contentsOfDirectory(
+                    at: dirURL,
+                    includingPropertiesForKeys: nil,
+                    options: [.skipsHiddenFiles]
+                )) ?? []
+                var subdirs: [URL] = []
+                var rollouts: [URL] = []
+                for child in children {
+                    let name = child.lastPathComponent
+                    if name.hasPrefix("rollout-") && child.pathExtension == "jsonl" {
+                        rollouts.append(child)
+                    } else if FileUtils.fastStat(path: child.path)?.isDirectory == true {
+                        subdirs.append(child)
+                    }
+                }
+                entry = DirCacheEntry(stamp: dirStamp, subdirs: subdirs, rolloutFiles: rollouts)
+                cacheLock.lock()
+                dirCache[dirPath] = entry
+                cacheLock.unlock()
+            }
+
+            stack.append(contentsOf: entry.subdirs)
+
+            for fileURL in entry.rolloutFiles {
+                guard let fileStamp = FileUtils.fastStat(path: fileURL.path), !fileStamp.isDirectory else {
+                    continue
+                }
+                if now.timeIntervalSince(fileStamp.modificationDate) <= maxAgeSeconds {
+                    activeFiles.append((fileURL, fileStamp))
+                }
             }
         }
-        return files
+
+        if visitedDirs.count < 512 {
+            cacheLock.lock()
+            if dirCache.count > 512 {
+                dirCache = dirCache.filter { visitedDirs.contains($0.key) }
+            }
+            cacheLock.unlock()
+        }
+
+        return activeFiles
+    }
+
+    private func pruneCachesIfNeeded(activePaths: Set<String>) {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        if rolloutCache.count > 128 {
+            rolloutCache = rolloutCache.filter { activePaths.contains($0.key) }
+        }
+        if metaCache.count > 512 {
+            metaCache = metaCache.filter { activePaths.contains($0.key) }
+        }
     }
 
     private func extractIdFromFilename(_ filename: String) -> String {
@@ -238,10 +372,44 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
         var detailIsCommand: Bool = false
     }
 
-    private func parseRollout(fileURL: URL) -> RolloutSummary? {
+    private func cachedParseRollout(fileURL: URL, stamp: FileStamp) -> RolloutSummary? {
+        let path = fileURL.path
+        cacheLock.lock()
+        if let hit = rolloutCache[path], hit.stamp == stamp {
+            cacheLock.unlock()
+            return hit.summary
+        }
+        cacheLock.unlock()
+
+        guard let summary = parseRollout(fileURL: fileURL, fileSize: stamp.size) else {
+            return nil
+        }
+
+        cacheLock.lock()
+        rolloutCache[path] = (stamp, summary)
+        cacheLock.unlock()
+        return summary
+    }
+
+    private static func lineMayContainLifecycle(_ line: String) -> Bool {
+        guard line.contains("\"event_msg\"") else { return false }
+        return line.contains("\"task_started\"")
+            || line.contains("\"task_complete\"")
+            || line.contains("\"turn_aborted\"")
+    }
+
+    private static func isRelevantRolloutLine(_ line: String) -> Bool {
+        line.contains("\"event_msg\"")
+            || line.contains("\"message\"")
+            || line.contains("\"function_call\"")
+            || line.contains("\"custom_tool_call\"")
+            || line.contains("\"session_meta\"")
+            || line.contains("\"turn_context\"")
+    }
+
+    private func parseRollout(fileURL: URL, fileSize: Int) -> RolloutSummary? {
         // A single tool result can exceed 64KB. Expand until a lifecycle event is present,
         // so output/reasoning alone cannot turn an active task into idle.
-        let fileSize = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         var maxBytes = 65536
         var lines: [String]
         while true {
@@ -252,12 +420,13 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
             if tail.last != "" { tail.removeLast() }
             lines = tail
             let hasLifecycle = lines.contains { line in
-                guard let data = line.data(using: .utf8),
+                guard Self.lineMayContainLifecycle(line),
+                      let data = line.data(using: .utf8),
                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                       json["type"] as? String == "event_msg",
                       let payload = json["payload"] as? [String: Any],
                       let type = payload["type"] as? String else { return false }
-                return ["task_started", "task_complete", "turn_aborted"].contains(type)
+                return type == "task_started" || type == "task_complete" || type == "turn_aborted"
             }
             if hasLifecycle || maxBytes >= fileSize { break }
             maxBytes = min(maxBytes * 2, fileSize)
@@ -270,6 +439,7 @@ public final class CodexAdapter: AgentAdapter, @unchecked Sendable {
         var lastAssistantMessage: String?
 
         for line in lines {
+            guard Self.isRelevantRolloutLine(line) else { continue }
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty, let lineData = trimmed.data(using: .utf8),
                   let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else {

@@ -77,19 +77,25 @@ private struct UsagePopoverView: View {
     let usage: SessionUsage
     let thresholdColor: Color
 
+    @MainActor
+    private static let relativeFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateTimeStyle = .named
+        return formatter
+    }()
+
     private var isAntigravity: Bool {
         usage.steps != nil && usage.contextTokens == nil
     }
 
     private var relativeTimeString: String {
-        let elapsed = Date().timeIntervalSince(usage.updatedAt)
+        let now = Date()
+        let elapsed = now.timeIntervalSince(usage.updatedAt)
         if elapsed < 3 && elapsed >= -1 {
             return "刚刚"
         }
-        let formatter = RelativeDateTimeFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.dateTimeStyle = .named
-        let str = formatter.localizedString(for: usage.updatedAt, relativeTo: Date())
+        let str = Self.relativeFormatter.localizedString(for: usage.updatedAt, relativeTo: now)
         if str.contains("0 秒") {
             return "刚刚"
         }

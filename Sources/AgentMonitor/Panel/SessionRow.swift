@@ -6,6 +6,7 @@ struct SessionRow: View {
     let session: AgentSession
     @ObservedObject var viewModel: MonitorViewModel
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.isPanelVisible) private var isPanelVisible
     @LocalState private var isHovered = false
     private static var lastScreenMouseLocation: CGPoint? = nil
 
@@ -165,22 +166,12 @@ struct SessionRow: View {
     private var timeView: some View {
         switch session.state {
         case .waitingForUser:
-            TimelineView(.periodic(from: .now, by: 30)) { context in
-                let now = context.date
-                let threshold = Double(AppSettings.shared.remindAfterMinutes * 60)
-                let isOverdue = AppSettings.shared.remindEnabled && (now.timeIntervalSince(session.stateSince) >= threshold)
-                let timeStr = StatusStyle.formattedTime(session: session, now: now)
-
-                HStack(spacing: 3) {
-                    if isOverdue {
-                        Image(systemName: "alarm.fill")
-                            .font(.system(size: 11))
-                    }
-                    Text(timeStr)
-                        .font(.system(size: 11, weight: isOverdue ? .semibold : .medium))
-                        .monospacedDigit()
+            if isPanelVisible {
+                TimelineView(.periodic(from: .now, by: 30)) { context in
+                    waitingTimeContent(now: context.date)
                 }
-                .foregroundColor(isOverdue ? .red : .orange)
+            } else {
+                waitingTimeContent(now: Date())
             }
         case .completed:
             Text(session.formattedTime)
@@ -188,14 +179,12 @@ struct SessionRow: View {
                 .monospacedDigit()
                 .foregroundColor(.secondary)
         case .running:
-            TimelineView(.periodic(from: .now, by: 1)) { context in
-                let elapsed = max(0, Int(context.date.timeIntervalSince(session.stateSince)))
-                let m = elapsed / 60
-                let s = elapsed % 60
-                Text(String(format: "%d:%02d", m, s))
-                    .font(.system(size: 11))
-                    .monospacedDigit()
-                    .foregroundColor(.blue)
+            if isPanelVisible {
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    runningTimeContent(now: context.date)
+                }
+            } else {
+                runningTimeContent(now: Date())
             }
         case .idle:
             Text(session.formattedTime)
@@ -203,6 +192,35 @@ struct SessionRow: View {
                 .monospacedDigit()
                 .foregroundColor(.secondary)
         }
+    }
+
+    /// 渲染等待用户响应的计时视图（抽离以便面板隐藏时静态渲染且保持布局高度一致）。
+    private func waitingTimeContent(now: Date) -> some View {
+        let threshold = Double(AppSettings.shared.remindAfterMinutes * 60)
+        let isOverdue = AppSettings.shared.remindEnabled && (now.timeIntervalSince(session.stateSince) >= threshold)
+        let timeStr = StatusStyle.formattedTime(session: session, now: now)
+
+        return HStack(spacing: 3) {
+            if isOverdue {
+                Image(systemName: "alarm.fill")
+                    .font(.system(size: 11))
+            }
+            Text(timeStr)
+                .font(.system(size: 11, weight: isOverdue ? .semibold : .medium))
+                .monospacedDigit()
+        }
+        .foregroundColor(isOverdue ? .red : .orange)
+    }
+
+    /// 渲染运行中会话的读秒文本（面板隐藏时停用每秒定时器）。
+    private func runningTimeContent(now: Date) -> some View {
+        let elapsed = max(0, Int(now.timeIntervalSince(session.stateSince)))
+        let m = elapsed / 60
+        let s = elapsed % 60
+        return Text(String(format: "%d:%02d", m, s))
+            .font(.system(size: 11))
+            .monospacedDigit()
+            .foregroundColor(.blue)
     }
 
     @ViewBuilder

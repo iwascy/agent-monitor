@@ -4,13 +4,36 @@ import Combine
 import ServiceManagement
 import AgentMonitorCore
 
+public struct MenuBarStateSummary: Equatable, Sendable {
+    public let highestState: SessionState?
+    public let waitingCount: Int
+    public let isPaused: Bool
+    public let isOverdue: Bool
+}
+
 @MainActor
 public final class MonitorViewModel: ObservableObject {
+    /// 预计算的会话树与状态统计索引，将原本每次渲染 O(N^2)~O(N^3) 的扫描降为 O(1) 查表。
+    private struct HierarchyIndex {
+        var byID: [String: AgentSession] = [:]
+        var parentByID: [String: String] = [:]
+        var rootSessions: [AgentSession] = []
+        var childrenByParent: [String: [AgentSession]] = [:]
+        var depthByID: [String: Int] = [:]
+        var fullSubtreeStatesByRoot: [String: Set<SessionState>] = [:]
+        var countByState: [SessionState: Int] = [:]
+        var cachedHighestState: SessionState? = nil
+        var cachedWaitingCount: Int = 0
+    }
+
+    private var hierarchyIndex = HierarchyIndex()
+
     @Published public private(set) var sessions: [AgentSession] = [] {
         didSet {
             autoClearEmptyFilter()
         }
     }
+    @Published public private(set) var isPanelVisible: Bool = false
     @Published public private(set) var isNotificationsPaused: Bool = false
     @Published public private(set) var isLaunchAtLogin: Bool = false
 
@@ -27,43 +50,114 @@ public final class MonitorViewModel: ObservableObject {
 
     @Published public private(set) var expandedSubagentIDs: Set<String> = []
 
-    // Ignore broken/cyclic links so malformed metadata cannot hide sessions or recurse forever.
-    private func parentID(of session: AgentSession) -> String? {
-        let byID = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0) })
-        var visited: Set<String> = [session.id]
-        var parent = session.parentSessionID
-        while let id = parent, let ancestor = byID[id] {
-            guard visited.insert(id).inserted else { return nil }
-            parent = ancestor.parentSessionID
+    /// 在会话列表或静音规则更新时一次性预构建层级树索引与菜单栏状态摘要。
+    private func rebuildDerivedCaches(rules: [MuteRule] = AppSettings.shared.muteRules) {
+        var idx = HierarchyIndex()
+        let byID = Dictionary(sessions.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        idx.byID = byID
+
+        // Ignore broken/cyclic links so malformed metadata cannot hide sessions or recurse forever.
+        for session in sessions {
+            idx.countByState[session.state, default: 0] += 1
+
+            var visited: Set<String> = [session.id]
+            var cursor = session.parentSessionID
+            var isCyclic = false
+            while let pid = cursor, let ancestor = byID[pid] {
+                if !visited.insert(pid).inserted {
+                    isCyclic = true
+                    break
+                }
+                cursor = ancestor.parentSessionID
+            }
+            if !isCyclic, let direct = session.parentSessionID, byID[direct] != nil {
+                idx.parentByID[session.id] = direct
+                idx.childrenByParent[direct, default: []].append(session)
+            } else {
+                idx.rootSessions.append(session)
+            }
         }
-        return session.parentSessionID.flatMap { byID[$0] == nil ? nil : $0 }
+
+        func assignDepthAndStates(_ node: AgentSession, depth: Int) -> Set<SessionState> {
+            idx.depthByID[node.id] = depth
+            var states: Set<SessionState> = [node.state]
+            if let children = idx.childrenByParent[node.id] {
+                for child in children {
+                    states.formUnion(assignDepthAndStates(child, depth: depth + 1))
+                }
+            }
+            return states
+        }
+
+        for root in idx.rootSessions {
+            idx.fullSubtreeStatesByRoot[root.id] = assignDepthAndStates(root, depth: 0)
+        }
+
+        // 预计算排除 scope == .all 静音规则后的菜单栏最高优先级状态与等待计数
+        var unmutedWaitingCount = 0
+        var hasCompleted = false
+        var hasRunning = false
+
+        for s in sessions {
+            switch s.state {
+            case .waitingForUser:
+                if let rule = MuteRule.matchingRule(for: s.cwd, rules: rules), rule.scope == .all {
+                    break
+                }
+                unmutedWaitingCount += 1
+            case .completed:
+                hasCompleted = true
+            case .running:
+                hasRunning = true
+            case .idle:
+                break
+            }
+        }
+
+        idx.cachedWaitingCount = unmutedWaitingCount
+        if unmutedWaitingCount > 0 {
+            idx.cachedHighestState = .waitingForUser
+        } else if hasCompleted {
+            idx.cachedHighestState = .completed
+        } else if hasRunning {
+            idx.cachedHighestState = .running
+        } else {
+            idx.cachedHighestState = nil
+        }
+
+        self.hierarchyIndex = idx
+    }
+
+    public func sessionCount(for state: SessionState) -> Int {
+        hierarchyIndex.countByState[state] ?? 0
     }
 
     public var rootSessions: [AgentSession] {
-        sessions.filter { parentID(of: $0) == nil }
+        hierarchyIndex.rootSessions
     }
 
     public func childSessions(of id: String) -> [AgentSession] {
-        sessions.filter { parentID(of: $0) == id }
+        hierarchyIndex.childrenByParent[id] ?? []
     }
 
     public func subtree(of session: AgentSession, expandedOnly: Bool = true) -> [AgentSession] {
         guard !expandedOnly || expandedSubagentIDs.contains(session.id) else { return [session] }
-        return [session] + childSessions(of: session.id).flatMap { subtree(of: $0, expandedOnly: expandedOnly) }
+        let children = childSessions(of: session.id)
+        guard !children.isEmpty else { return [session] }
+        return [session] + children.flatMap { subtree(of: $0, expandedOnly: expandedOnly) }
     }
 
     public func roots(in state: SessionState) -> [AgentSession] {
-        rootSessions.filter { root in
-            if filterState == state {
-                return subtree(of: root, expandedOnly: false).contains { $0.state == state }
+        if filterState == state {
+            return hierarchyIndex.rootSessions.filter { root in
+                hierarchyIndex.fullSubtreeStatesByRoot[root.id]?.contains(state) == true
             }
-            return root.state == state
         }
+        return hierarchyIndex.rootSessions.filter { $0.state == state }
     }
 
     public func depth(of session: AgentSession) -> Int {
-        guard let id = parentID(of: session), let parent = sessions.first(where: { $0.id == id }) else { return 0 }
-        return 1 + depth(of: parent)
+        hierarchyIndex.depthByID[session.id] ?? 0
     }
 
     public func toggleSubagents(of id: String) {
@@ -120,33 +214,11 @@ public final class MonitorViewModel: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
 
     public var highestState: SessionState? {
-        let active = sessions
-        let waitingActive = active.filter { s in
-            if let rule = MuteRule.matchingRule(for: s.cwd, rules: AppSettings.shared.muteRules), rule.scope == .all {
-                return false
-            }
-            return true
-        }
-        if waitingActive.contains(where: { $0.state == .waitingForUser }) {
-            return .waitingForUser
-        }
-        if active.contains(where: { $0.state == .completed }) {
-            return .completed
-        }
-        if active.contains(where: { $0.state == .running }) {
-            return .running
-        }
-        return nil
+        hierarchyIndex.cachedHighestState
     }
 
     public var waitingCount: Int {
-        sessions.filter { s in
-            guard s.state == .waitingForUser else { return false }
-            if let rule = MuteRule.matchingRule(for: s.cwd, rules: AppSettings.shared.muteRules), rule.scope == .all {
-                return false
-            }
-            return true
-        }.count
+        hierarchyIndex.cachedWaitingCount
     }
 
     public func recalculateOverdue(now: Date = Date()) {
@@ -170,6 +242,16 @@ public final class MonitorViewModel: ObservableObject {
 
     public var hasOverdueWaitingSessions: Bool {
         hasOverdue
+    }
+
+    public var menuBarStateSummary: MenuBarStateSummary {
+        let s = effectiveMenuState
+        return MenuBarStateSummary(
+            highestState: s.highestState,
+            waitingCount: s.waitingCount,
+            isPaused: s.isPaused,
+            isOverdue: s.isOverdue
+        )
     }
 
     public var effectiveMenuState: (highestState: SessionState?, waitingCount: Int, isPaused: Bool, isOverdue: Bool) {
@@ -754,6 +836,7 @@ public final class MonitorViewModel: ObservableObject {
         if self.sessions != tree {
             self.sessions = tree
         }
+        rebuildDerivedCaches(rules: rules)
         recalculateOverdue()
     }
 
@@ -844,6 +927,7 @@ public final class MonitorViewModel: ObservableObject {
 
     public func onPanelAppear() {
         expandedSubagentIDs = []
+        isPanelVisible = true
         sessionStore.isPanelVisible = true
         if ProcessInfo.processInfo.environment["AGENT_MONITOR_IDLE_EXPANDED"] == nil {
             isIdleExpanded = AppSettings.shared.idleExpandedByDefault
@@ -851,6 +935,7 @@ public final class MonitorViewModel: ObservableObject {
     }
 
     public func onPanelDisappear() {
+        isPanelVisible = false
         sessionStore.isPanelVisible = false
         keyboardSelectionID = nil
     }
@@ -883,7 +968,7 @@ public final class MonitorViewModel: ObservableObject {
 
     public func activateCurrentSelection() {
         guard let id = keyboardSelectionID,
-              let session = sessions.first(where: { $0.id == id }) else { return }
+              let session = hierarchyIndex.byID[id] else { return }
         if session.state == .completed {
             withAnimation(.smooth) {
                 markAsRead(id: session.id)
@@ -894,7 +979,7 @@ public final class MonitorViewModel: ObservableObject {
 
     public func markCurrentSelectionAsReadAndAdvance() {
         guard let id = keyboardSelectionID,
-              let session = sessions.first(where: { $0.id == id }),
+              let session = hierarchyIndex.byID[id],
               session.state == .completed else { return }
 
         let currentIDs = visibleSessionIDs
@@ -931,7 +1016,7 @@ public final class MonitorViewModel: ObservableObject {
         default: return
         }
 
-        let count = sessions.filter { $0.state == target }.count
+        let count = sessionCount(for: target)
         guard count > 0 else { return }
 
         withAnimation(.snappy(duration: 0.2)) {

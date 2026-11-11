@@ -6,10 +6,10 @@ struct FilterBar: View {
     @Namespace private var ns
 
     var body: some View {
-        let waitingCount = viewModel.sessions.filter { $0.state == .waitingForUser }.count
-        let doneCount = viewModel.sessions.filter { $0.state == .completed }.count
-        let runningCount = viewModel.sessions.filter { $0.state == .running }.count
-        let idleCount = viewModel.sessions.filter { $0.state == .idle }.count
+        let waitingCount = viewModel.sessionCount(for: .waitingForUser)
+        let doneCount = viewModel.sessionCount(for: .completed)
+        let runningCount = viewModel.sessionCount(for: .running)
+        let idleCount = viewModel.sessionCount(for: .idle)
 
         GlassEffectContainer(spacing: 6) {
             HStack(spacing: 6) {

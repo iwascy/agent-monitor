@@ -2,6 +2,18 @@ import SwiftUI
 import AppKit
 import AgentMonitorCore
 
+/// 传递面板当前是否可见，供子视图在面板收起后暂停高频动画与计时器。
+private struct PanelVisibleKey: EnvironmentKey {
+    static let defaultValue: Bool = true
+}
+
+extension EnvironmentValues {
+    var isPanelVisible: Bool {
+        get { self[PanelVisibleKey.self] }
+        set { self[PanelVisibleKey.self] = newValue }
+    }
+}
+
 public struct MenuView: View {
     @ObservedObject var viewModel: MonitorViewModel
     @Environment(\.colorScheme) var colorScheme
@@ -43,6 +55,7 @@ public struct MenuView: View {
         .padding(10)
         .frame(width: 384)
         .fixedSize(horizontal: false, vertical: true)
+        .environment(\.isPanelVisible, viewModel.isPanelVisible)
         .preferredColorScheme(forcedColorScheme)
         .background(WindowAccessor { win in
             self.panelWindow = win

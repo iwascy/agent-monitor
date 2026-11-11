@@ -46,10 +46,14 @@ public final class ClaudeHookEventReader: @unchecked Sendable {
     private var states: [String: ClaudeHookState] = [:]
     private var lastEventInfo: (at: Date, event: String)?
     private let lock = NSLock()
-    private let maxFileSizeBeforeRotation: UInt64 = 5 * 1024 * 1024 // 5 MB
+    internal let maxFileSizeBeforeRotation: UInt64
 
-    public init(fileURL: URL = ClaudeHookEventReader.defaultFileURL) {
+    public init(
+        fileURL: URL = ClaudeHookEventReader.defaultFileURL,
+        maxFileSizeBeforeRotation: UInt64 = 5 * 1024 * 1024
+    ) {
         self.fileURL = fileURL
+        self.maxFileSizeBeforeRotation = maxFileSizeBeforeRotation
         checkRotationOnStartup()
     }
 
@@ -77,6 +81,7 @@ public final class ClaudeHookEventReader: @unchecked Sendable {
         try? fm.removeItem(at: rotatedURL)
         try? fm.moveItem(at: fileURL, to: rotatedURL)
         fileOffset = 0
+        fileHeadSignature = nil
     }
 
     public func poll() -> [String: ClaudeHookState] {
@@ -113,6 +118,9 @@ public final class ClaudeHookEventReader: @unchecked Sendable {
         }
 
         if currentSize == fileOffset && fileOffset > 0 {
+            if currentSize > maxFileSizeBeforeRotation {
+                rotateFile()
+            }
             return states
         }
 
@@ -161,6 +169,12 @@ public final class ClaudeHookEventReader: @unchecked Sendable {
                     parseLine(trimmed)
                 }
             }
+        }
+
+        // 运行期若已完整消费至文件末尾且文件体积超出轮转上限，原地轮转并保留内存活跃状态快照
+        if fileOffset >= currentSize && currentSize > maxFileSizeBeforeRotation {
+            try? handle.close()
+            rotateFile()
         }
 
         return states

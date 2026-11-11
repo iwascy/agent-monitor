@@ -39,6 +39,9 @@ public final class SessionStore: @unchecked Sendable {
         set {
             lock.lock()
             if _disabledKinds != newValue {
+                for kind in newValue {
+                    lastAdapterResults.removeValue(forKey: kind)
+                }
                 _disabledKinds = newValue
                 suppressAddedOnNextRefresh = true
             }
@@ -70,10 +73,12 @@ public final class SessionStore: @unchecked Sendable {
     }
 
     private var sessionCache: [String: AgentSession] = [:]
+    private var lastAdapterResults: [AgentKind: [AgentSession]] = [:]
     private var readCompletedKeys: Set<String> = [] // "\(sessionId):\(completionTimestamp)"
     private var runningStartTimes: [String: Date] = [:]
     private var isInitialScan = true
     private let lock = NSRecursiveLock()
+    private let scanLock = NSLock()
 
     private var _isPanelVisible: Bool = false
     public var isPanelVisible: Bool {
@@ -86,6 +91,11 @@ public final class SessionStore: @unchecked Sendable {
             lock.lock()
             let changed = (_isPanelVisible != newValue)
             _isPanelVisible = newValue
+            for adapter in adapters {
+                if let paseo = adapter as? PaseoAdapter {
+                    paseo.isPanelVisible = newValue
+                }
+            }
             lock.unlock()
 
             if changed {
@@ -115,7 +125,12 @@ public final class SessionStore: @unchecked Sendable {
     private var liveTimer: DispatchSourceTimer?
     private let workQueue = DispatchQueue(label: "com.agentmonitor.sessionstore", qos: .utility)
 
+    /// 预规范化各 Adapter 的监听路径，兼容 macOS `/var` -> `/private/var` 等符号链接前缀
+    private let normalizedWatchPathsByKind: [AgentKind: [String]]
+
     public let pollingInterval: TimeInterval
+    /// 面板打开期间的兜底轮询周期（文件变更已由 0.3s FileWatcher 实时驱动，读秒由 UI TimelineView 本地渲染）
+    private let liveRefreshInterval: TimeInterval = 3.0
 
     public init(
         adapters: [AgentAdapter],
@@ -126,11 +141,22 @@ public final class SessionStore: @unchecked Sendable {
         self._maxAgeSeconds = maxAgeSeconds
         self.pollingInterval = pollingInterval
 
-        // Set up file watcher
+        var watchMap: [AgentKind: [String]] = [:]
+        for adapter in adapters {
+            let normPaths = adapter.watchPaths.flatMap { url -> [String] in
+                let raw = Self.canonicalPath(url.path)
+                let resolved = Self.canonicalPath(url.resolvingSymlinksInPath().path)
+                return raw == resolved ? [raw] : [raw, resolved]
+            }
+            watchMap[adapter.kind, default: []].append(contentsOf: normPaths)
+        }
+        self.normalizedWatchPathsByKind = watchMap
+
+        // Set up file watcher（按变更路径定向刷新受影响的 Adapter）
         let allPaths = adapters.flatMap { $0.watchPaths }
         if !allPaths.isEmpty {
-            self.fileWatcher = FileWatcher(paths: allPaths, debounceInterval: 0.3, queue: workQueue) { [weak self] in
-                self?.refresh()
+            self.fileWatcher = FileWatcher(paths: allPaths, debounceInterval: 0.3, queue: workQueue) { [weak self] changedPaths in
+                self?.refresh(changedPaths: changedPaths)
             }
         }
     }
@@ -141,8 +167,16 @@ public final class SessionStore: @unchecked Sendable {
 
     public func start() {
         lock.lock()
-        defer { lock.unlock() }
-
+        for adapter in adapters {
+            if let paseo = adapter as? PaseoAdapter {
+                paseo.onSnapshotUpdated = { [weak self] in
+                    guard let self else { return }
+                    self.workQueue.async { [weak self] in
+                        _ = self?.refresh(targetKinds: [.paseo])
+                    }
+                }
+            }
+        }
         fileWatcher?.start()
 
         if pollingTimer == nil {
@@ -154,6 +188,7 @@ public final class SessionStore: @unchecked Sendable {
             timer.resume()
             self.pollingTimer = timer
         }
+        lock.unlock()
 
         // Perform initial refresh asynchronously on workQueue to avoid blocking main thread
         workQueue.async { [weak self] in
@@ -166,6 +201,12 @@ public final class SessionStore: @unchecked Sendable {
         defer { lock.unlock() }
 
         _isPanelVisible = false
+        for adapter in adapters {
+            if let paseo = adapter as? PaseoAdapter {
+                paseo.isPanelVisible = false
+                paseo.onSnapshotUpdated = nil
+            }
+        }
         fileWatcher?.stop()
         if let timer = pollingTimer {
             timer.cancel()
@@ -186,9 +227,10 @@ public final class SessionStore: @unchecked Sendable {
     }
 
     private func startLiveTimer() {
+        lock.lock()
         stopLiveTimer()
         let timer = DispatchSource.makeTimerSource(queue: workQueue)
-        timer.schedule(deadline: .now() + 1.0, repeating: 1.0)
+        timer.schedule(deadline: .now() + liveRefreshInterval, repeating: liveRefreshInterval)
         timer.setEventHandler { [weak self] in
             guard let self = self else { return }
             let isVisible: Bool = {
@@ -202,6 +244,7 @@ public final class SessionStore: @unchecked Sendable {
         }
         timer.resume()
         self.liveTimer = timer
+        lock.unlock()
     }
 
     private func stopLiveTimer() {
@@ -214,16 +257,12 @@ public final class SessionStore: @unchecked Sendable {
     public var currentSessions: [AgentSession] {
         lock.lock()
         defer { lock.unlock() }
-        return Array(sessionCache.values).sorted { lhs, rhs in
+        return Self.sortedSessions(sessionCache.values)
+    }
+
+    private static func sortedSessions<S: Sequence>(_ values: S) -> [AgentSession] where S.Element == AgentSession {
+        values.sorted { lhs, rhs in
             // Sort order: waitingForUser first, then completed, then running, then idle
-            let stateRank = { (state: SessionState) -> Int in
-                switch state {
-                case .waitingForUser: return 0
-                case .completed: return 1
-                case .running: return 2
-                case .idle: return 3
-                }
-            }
             let rankL = stateRank(lhs.state)
             let rankR = stateRank(rhs.state)
             if rankL != rankR {
@@ -233,25 +272,34 @@ public final class SessionStore: @unchecked Sendable {
         }
     }
 
+    @inline(__always)
+    private static func stateRank(_ state: SessionState) -> Int {
+        switch state {
+        case .waitingForUser: return 0
+        case .completed: return 1
+        case .running: return 2
+        case .idle: return 3
+        }
+    }
+
     public func markAsRead(id: String) {
         lock.lock()
-        defer { lock.unlock() }
-
-        guard var session = sessionCache[id] else { return }
-        if session.state == .completed {
-            let key = "\(session.id):\(Int64(session.lastActivity.timeIntervalSince1970))"
-            readCompletedKeys.insert(key)
-            session.state = .idle
-            sessionCache[id] = session
-            let updated = currentSessions
-            publishSessions(updated)
+        guard var session = sessionCache[id], session.state == .completed else {
+            lock.unlock()
+            return
         }
+        let key = "\(session.id):\(Int64(session.lastActivity.timeIntervalSince1970))"
+        readCompletedKeys.insert(key)
+        session.state = .idle
+        sessionCache[id] = session
+        let updated = Self.sortedSessions(sessionCache.values)
+        lock.unlock()
+
+        publishSessions(updated)
     }
 
     public func markAllAsRead() {
         lock.lock()
-        defer { lock.unlock() }
-
         for (id, var session) in sessionCache {
             if session.state == .completed {
                 let key = "\(session.id):\(Int64(session.lastActivity.timeIntervalSince1970))"
@@ -260,7 +308,9 @@ public final class SessionStore: @unchecked Sendable {
                 sessionCache[id] = session
             }
         }
-        let updated = currentSessions
+        let updated = Self.sortedSessions(sessionCache.values)
+        lock.unlock()
+
         publishSessions(updated)
     }
 
@@ -270,31 +320,145 @@ public final class SessionStore: @unchecked Sendable {
         }
     }
 
+    /// 规范化文件路径，统一消除 macOS `/var`、`/tmp`、`/etc` 符号链接前缀与末尾斜杠差异。
+    internal static func canonicalPath(_ rawPath: String) -> String {
+        var p = (rawPath as NSString).standardizingPath
+        if p.count > 1 && p.hasSuffix("/") {
+            p.removeLast()
+        }
+        if p == "/var" || p.hasPrefix("/var/") {
+            p = "/private" + p
+        } else if p == "/tmp" || p.hasPrefix("/tmp/") {
+            p = "/private" + p
+        } else if p == "/etc" || p.hasPrefix("/etc/") {
+            p = "/private" + p
+        }
+        return p
+    }
+
+    /// 判断事件路径是否命中某个监听路径（支持子文件、父目录变动以及 SQLite `-wal`/`-shm` 伴生文件）。
+    internal static func pathMatches(_ eventPath: String, watchPath: String) -> Bool {
+        if eventPath == watchPath { return true }
+        if eventPath.hasPrefix(watchPath + "/") { return true }
+        if watchPath.hasPrefix(eventPath + "/") { return true }
+        // SQLite WAL/SHM/Journal 文件与主库同目录且以 `<dbPath>-wal` / `<dbPath>-shm` 命名
+        if eventPath.hasPrefix(watchPath + "-") { return true }
+        return false
+    }
+
+    /// 根据文件系统变更路径集合计算受影响的 Adapter 类型；若无法归属到任何已知 Adapter 则返回 `nil`（回退全量扫描）。
+    internal func resolveAffectedKinds(for changedPaths: Set<String>) -> Set<AgentKind>? {
+        guard !changedPaths.isEmpty else { return nil }
+        let normalizedEvents = changedPaths.map(Self.canonicalPath)
+        var matched = Set<AgentKind>()
+        for (kind, watchList) in normalizedWatchPathsByKind {
+            let hit = normalizedEvents.contains { ev in
+                watchList.contains { wp in Self.pathMatches(ev, watchPath: wp) }
+            }
+            if hit {
+                matched.insert(kind)
+            }
+        }
+        return matched.isEmpty ? nil : matched
+    }
+
     @discardableResult
     public func refresh() -> [SessionTransition] {
+        refresh(targetKinds: nil)
+    }
+
+    /// 根据变更路径集合执行定向刷新：仅重新扫描匹配的未禁用 Adapter，其余直接复用缓存结果。
+    @discardableResult
+    public func refresh(changedPaths: Set<String>?) -> [SessionTransition] {
+        guard let changedPaths, !changedPaths.isEmpty else {
+            return refresh(targetKinds: nil)
+        }
+        guard let matchedKinds = resolveAffectedKinds(for: changedPaths) else {
+            return refresh(targetKinds: nil)
+        }
+        return refresh(targetKinds: matchedKinds)
+    }
+
+    @discardableResult
+    public func refresh(targetKinds: Set<AgentKind>?) -> [SessionTransition] {
+        scanLock.lock()
+        defer { scanLock.unlock() }
+
+        // 1. 短暂加锁读取当前配置快照，随后立即释放锁，保证耗时的磁盘/SQLite I/O 不阻塞主线程
         lock.lock()
-        defer { lock.unlock() }
-
-        let suppressAdded = suppressAddedOnNextRefresh
+        let initialSuppressAdded = suppressAddedOnNextRefresh
         suppressAddedOnNextRefresh = false
+        let snapshotDisabled = _disabledKinds
+        let isInitial = isInitialScan
+        let cachedResultsSnapshot = lastAdapterResults
+        lock.unlock()
 
-        var scannedSessions: [String: AgentSession] = [:]
-        var successfulAdapters: Set<AgentKind> = []
-        let currentDisabledKinds = _disabledKinds
-        let currentMaxAge = _maxAgeSeconds
+        // 确定本轮实际需要调用 scan() 的 Adapter 集合
+        let kindsToScan: Set<AgentKind>
+        if let targetKinds, !isInitial {
+            var needed = targetKinds.subtracting(snapshotDisabled)
+            // 任何尚未建立基线缓存的未禁用 Adapter 仍需补扫一次
+            for adapter in adapters where !snapshotDisabled.contains(adapter.kind) {
+                if cachedResultsSnapshot[adapter.kind] == nil {
+                    needed.insert(adapter.kind)
+                }
+            }
+            if needed.isEmpty {
+                // 变更全部落在已禁用的 Adapter 上，且无待补扫项，直接跳过本轮 I/O
+                return []
+            }
+            kindsToScan = needed
+        } else {
+            kindsToScan = Set(adapters.map(\.kind)).subtracting(snapshotDisabled)
+        }
+
+        // 2. 在锁外执行受影响 Adapter 的磁盘与数据库扫描
+        var freshlyScannedByKind: [AgentKind: [AgentSession]] = [:]
+        var failedKinds = Set<AgentKind>()
 
         for adapter in adapters {
-            if currentDisabledKinds.contains(adapter.kind) {
+            if snapshotDisabled.contains(adapter.kind) || !kindsToScan.contains(adapter.kind) {
                 continue
             }
             do {
                 let list = try adapter.scan()
+                freshlyScannedByKind[adapter.kind] = list
+            } catch {
+                failedKinds.insert(adapter.kind)
+                NSLog("Adapter \(adapter.kind) scan failed: \(error)")
+            }
+        }
+
+        // 3. 重新加锁，结合最新配置合并结果并推进会话状态机
+        lock.lock()
+        let suppressAdded = initialSuppressAdded || suppressAddedOnNextRefresh
+        suppressAddedOnNextRefresh = false
+        let currentDisabledKinds = _disabledKinds
+        let currentMaxAge = _maxAgeSeconds
+
+        for (kind, list) in freshlyScannedByKind where !currentDisabledKinds.contains(kind) {
+            lastAdapterResults[kind] = list
+        }
+        for disabled in currentDisabledKinds {
+            lastAdapterResults.removeValue(forKey: disabled)
+        }
+
+        var scannedSessions: [String: AgentSession] = [:]
+        var successfulAdapters: Set<AgentKind> = []
+
+        for adapter in adapters {
+            let kind = adapter.kind
+            if currentDisabledKinds.contains(kind) {
+                continue
+            }
+            if failedKinds.contains(kind) {
+                continue
+            }
+            if let list = freshlyScannedByKind[kind] ?? lastAdapterResults[kind] {
                 for item in list {
                     scannedSessions[item.id] = item
                 }
-                successfulAdapters.insert(adapter.kind)
-            } catch {
-                NSLog("Adapter \(adapter.kind) scan failed: \(error)")
+                successfulAdapters.insert(kind)
             }
         }
 
@@ -318,6 +482,7 @@ public final class SessionStore: @unchecked Sendable {
         for (id, existing) in sessionCache {
             if currentDisabledKinds.contains(existing.kind) {
                 sessionCache.removeValue(forKey: id)
+                runningStartTimes.removeValue(forKey: id)
                 hasContentChanges = true
                 removedFromDisabled = true
             }
@@ -333,11 +498,13 @@ public final class SessionStore: @unchecked Sendable {
             if let fresh = scannedSessions[id] {
                 if now.timeIntervalSince(fresh.lastActivity) > currentMaxAge && !retainedAncestors.contains(id) {
                     sessionCache.removeValue(forKey: id)
+                    runningStartTimes.removeValue(forKey: id)
                     transitions.append(.removed(id: id))
                     hasContentChanges = true
                 }
             } else {
                 sessionCache.removeValue(forKey: id)
+                runningStartTimes.removeValue(forKey: id)
                 transitions.append(.removed(id: id))
                 hasContentChanges = true
             }
@@ -409,26 +576,39 @@ public final class SessionStore: @unchecked Sendable {
             }
         }
 
-        let isInitial = isInitialScan
+        // 惰性淘汰已不再存在于缓存会话中的旧已读标记，防止长驻无限累积
+        if readCompletedKeys.count > 512 {
+            let activePrefixes = Set(sessionCache.keys)
+            readCompletedKeys = readCompletedKeys.filter { key in
+                guard let colon = key.lastIndex(of: ":") else { return false }
+                return activePrefixes.contains(String(key[..<colon]))
+            }
+        }
+
+        let wasInitial = isInitialScan
         isInitialScan = false
         let isVisible = _isPanelVisible
 
-        if !transitions.isEmpty || removedFromDisabled {
-            let updated = currentSessions
+        let shouldPublishForTransitions = !transitions.isEmpty || removedFromDisabled
+        let shouldPublishForContent = wasInitial || (isVisible && hasContentChanges)
+        let updatedSnapshot: [AgentSession]? = (shouldPublishForTransitions || shouldPublishForContent)
+            ? Self.sortedSessions(sessionCache.values)
+            : nil
+        let transitionCallback = onTransition
+        lock.unlock()
+
+        if let updated = updatedSnapshot {
             publishSessions(updated)
-            if !isInitial {
+            if shouldPublishForTransitions && !wasInitial {
                 for t in transitions {
                     if suppressAdded {
                         if case .added = t {
                             continue
                         }
                     }
-                    onTransition?(t)
+                    transitionCallback?(t)
                 }
             }
-        } else if isInitial || (isVisible && hasContentChanges) {
-            let updated = currentSessions
-            publishSessions(updated)
         }
 
         return transitions

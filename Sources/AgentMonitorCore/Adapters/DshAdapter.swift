@@ -57,11 +57,12 @@ public final class DshAdapter: AgentAdapter, @unchecked Sendable {
 
         let now = Date()
         var results: [AgentSession] = []
+        var activePaths = Set<String>()
 
         // Enumerate directory: sessions/<slug>/<uuid>/
         guard let slugDirs = try? fm.contentsOfDirectory(
             at: sessionsDirectory,
-            includingPropertiesForKeys: [.contentModificationDateKey],
+            includingPropertiesForKeys: nil,
             options: [.skipsHiddenFiles]
         ) else {
             return []
@@ -70,7 +71,7 @@ public final class DshAdapter: AgentAdapter, @unchecked Sendable {
         for slugDir in slugDirs {
             guard let sessionDirs = try? fm.contentsOfDirectory(
                 at: slugDir,
-                includingPropertiesForKeys: [.contentModificationDateKey],
+                includingPropertiesForKeys: nil,
                 options: [.skipsHiddenFiles]
             ) else {
                 continue
@@ -80,23 +81,26 @@ public final class DshAdapter: AgentAdapter, @unchecked Sendable {
                 let zstdFile = sessionDir.appendingPathComponent("session.v4.jsonl.zstd")
                 let uncompressedFile = sessionDir.appendingPathComponent("session.v4.jsonl") // In case uncompressed fixture
                 let targetDataFile: URL
+                let stamp: FileStamp
 
-                if fm.fileExists(atPath: zstdFile.path) {
+                if let s = FileUtils.fastStat(path: zstdFile.path), !s.isDirectory {
                     targetDataFile = zstdFile
-                } else if fm.fileExists(atPath: uncompressedFile.path) {
+                    stamp = s
+                } else if let s = FileUtils.fastStat(path: uncompressedFile.path), !s.isDirectory {
                     targetDataFile = uncompressedFile
+                    stamp = s
                 } else {
                     continue
                 }
 
-                let resourceValues = try? targetDataFile.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
-                let mtime = resourceValues?.contentModificationDate ?? now
-                let fileSize = resourceValues?.fileSize ?? 0
+                let mtime = stamp.modificationDate
+                let fileSize = stamp.size
 
                 // Filter by mtime first before any lock probing!
                 if now.timeIntervalSince(mtime) > maxAgeSeconds {
                     continue
                 }
+                activePaths.insert(targetDataFile.path)
 
                 // Check lock state only for sessions within the active time window
                 let lockFile = sessionDir.appendingPathComponent("session.lock")
@@ -155,6 +159,12 @@ public final class DshAdapter: AgentAdapter, @unchecked Sendable {
                 results.append(session)
             }
         }
+
+        cacheLock.lock()
+        if summaryCache.count > 128 {
+            summaryCache = summaryCache.filter { activePaths.contains($0.key) }
+        }
+        cacheLock.unlock()
 
         return results
     }

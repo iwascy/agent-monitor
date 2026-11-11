@@ -9,6 +9,12 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
     public let maxAgeSeconds: TimeInterval
     public var showUsage: Bool
 
+    private let usesDefaultLockCheck: Bool
+    private let cacheLock = NSLock()
+    private var schemaColumnsCache: [String: Set<String>] = [:]
+    private var transcriptCache: [String: (stamp: FileStamp, info: TranscriptInfo)] = [:]
+    private var cwdCache: [String: String?] = [:]
+
     public init(
         baseDirectory: URL? = nil,
         isLockHeld: (@Sendable (String) -> Bool)? = nil,
@@ -17,6 +23,7 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
     ) {
         let home = FileManager.default.homeDirectoryForCurrentUser
         self.baseDirectory = baseDirectory ?? home.appendingPathComponent(".gemini/antigravity")
+        self.usesDefaultLockCheck = (isLockHeld == nil)
         self.isLockHeld = isLockHeld ?? { path in
             guard FileManager.default.fileExists(atPath: path) else { return false }
             let fd = open(path, O_RDONLY)
@@ -58,13 +65,25 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
         let rows = try readSummaries(dbURL: summariesDBURL)
         var results: [AgentSession] = []
 
+        // 默认锁检测模式下，先一次性读取 presence 目录中实际存在的 .lock 文件集合，避免对大量过期行逐个发起系统调用
+        let existingLockNames: Set<String>? = usesDefaultLockCheck
+            ? Set((try? fm.contentsOfDirectory(atPath: presenceDir.path)) ?? [])
+            : nil
+
         let rowsByID = Dictionary(uniqueKeysWithValues: rows.map { ($0.conversationId, $0) })
         // Keep ancestors of recent children, even if the parent itself has not written recently.
         var includedIDs = Set<String>()
         for row in rows where !row.killed || !row.parentConversationID.isEmpty {
             guard let modified = row.lastModified else { continue }
-            let lockPath = presenceDir.appendingPathComponent("\(row.conversationId).lock").path
-            guard now.timeIntervalSince(modified) <= maxAgeSeconds || isLockHeld(lockPath) else { continue }
+            let isWithinWindow = now.timeIntervalSince(modified) <= maxAgeSeconds
+            if !isWithinWindow {
+                let lockFileName = "\(row.conversationId).lock"
+                if let existingLockNames, !existingLockNames.contains(lockFileName) {
+                    continue
+                }
+                let lockPath = presenceDir.appendingPathComponent(lockFileName).path
+                guard isLockHeld(lockPath) else { continue }
+            }
             var current: SummaryRow? = row
             var visited = Set<String>()
             while let ancestor = current, visited.insert(ancestor.conversationId).inserted {
@@ -73,23 +92,16 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
             }
         }
 
+        var activeTranscriptPaths = Set<String>()
+
         for row in rows where includedIDs.contains(row.conversationId) {
 
             guard let lastModified = row.lastModified else {
                 continue
             }
 
-            // Parse CWD from workspace_uris
-            var resolvedCwd: String? = nil
-            if let urisData = row.workspaceUris.data(using: .utf8),
-               let uriArray = try? JSONSerialization.jsonObject(with: urisData) as? [String],
-               let firstUri = uriArray.first {
-                if firstUri.hasPrefix("file://") {
-                    resolvedCwd = URL(string: firstUri)?.path
-                } else {
-                    resolvedCwd = firstUri
-                }
-            }
+            // Parse CWD from workspace_uris（带缓存）
+            let resolvedCwd = resolveWorkspaceCwd(row.workspaceUris)
 
             var fallbackTitle = resolvedCwd.map { ($0 as NSString).lastPathComponent } ?? "Antigravity"
             if !row.parentConversationID.isEmpty {
@@ -107,15 +119,24 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
             }
             let title = !row.title.isEmpty ? row.title : fallbackTitle
 
-            // Check transcript for waiting states and response details
+            let isActiveRow = !row.killed && (row.status == "CASCADE_RUN_STATUS_RUNNING" || row.notFullyIdle)
+            let needsTranscriptForIdleDetail = row.preview.isEmpty || row.preview == title
+
             let transcriptURL = brainDir.appendingPathComponent(row.conversationId).appendingPathComponent(".system_generated/logs/transcript.jsonl")
-            let transcriptInfo = fm.fileExists(atPath: transcriptURL.path) ? inspectTranscript(url: transcriptURL) : TranscriptInfo()
+            let transcriptInfo: TranscriptInfo
+            if isActiveRow || needsTranscriptForIdleDetail {
+                activeTranscriptPaths.insert(transcriptURL.path)
+                transcriptInfo = cachedTranscriptInfo(url: transcriptURL)
+            } else {
+                // 空闲会话已有有效 preview 时无需触碰磁盘读取 transcript.jsonl
+                transcriptInfo = TranscriptInfo()
+            }
 
             var state: SessionState = .idle
             var waitingLabel: String? = nil
             var detail: String? = nil
 
-            if !row.killed && (row.status == "CASCADE_RUN_STATUS_RUNNING" || row.notFullyIdle) {
+            if isActiveRow {
                 if transcriptInfo.isWaiting {
                     state = .waitingForUser
                     waitingLabel = "在问你"
@@ -167,7 +188,69 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
             results.append(session)
         }
 
+        pruneCachesIfNeeded(keepingTranscriptPaths: activeTranscriptPaths)
         return results
+    }
+
+    private func resolveWorkspaceCwd(_ workspaceUris: String) -> String? {
+        guard !workspaceUris.isEmpty, workspaceUris != "[]" else { return nil }
+        cacheLock.lock()
+        if let hit = cwdCache[workspaceUris] {
+            cacheLock.unlock()
+            return hit
+        }
+        cacheLock.unlock()
+
+        var resolvedCwd: String? = nil
+        if let urisData = workspaceUris.data(using: .utf8),
+           let uriArray = try? JSONSerialization.jsonObject(with: urisData) as? [String],
+           let firstUri = uriArray.first {
+            if firstUri.hasPrefix("file://") {
+                resolvedCwd = URL(string: firstUri)?.path
+            } else {
+                resolvedCwd = firstUri
+            }
+        }
+
+        cacheLock.lock()
+        if cwdCache.count > 512 {
+            cwdCache.removeAll(keepingCapacity: true)
+        }
+        cwdCache[workspaceUris] = resolvedCwd
+        cacheLock.unlock()
+        return resolvedCwd
+    }
+
+    private func cachedTranscriptInfo(url: URL) -> TranscriptInfo {
+        let path = url.path
+        guard let stamp = FileUtils.fastStat(path: path) else {
+            cacheLock.lock()
+            transcriptCache.removeValue(forKey: path)
+            cacheLock.unlock()
+            return TranscriptInfo()
+        }
+
+        cacheLock.lock()
+        if let cached = transcriptCache[path], cached.stamp == stamp {
+            cacheLock.unlock()
+            return cached.info
+        }
+        cacheLock.unlock()
+
+        let info = inspectTranscript(url: url)
+
+        cacheLock.lock()
+        transcriptCache[path] = (stamp, info)
+        cacheLock.unlock()
+        return info
+    }
+
+    private func pruneCachesIfNeeded(keepingTranscriptPaths: Set<String>) {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        if transcriptCache.count > 128 {
+            transcriptCache = transcriptCache.filter { keepingTranscriptPaths.contains($0.key) }
+        }
     }
 
     private struct SummaryRow {
@@ -222,101 +305,76 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
         throw DatabaseError(description: "conversation_summaries.db: \(lastError)")
     }
 
-    private func readSummaries(dbURL: URL) throws -> [SummaryRow] {
-        let (database, probe) = try openAndPrepare(dbURL: dbURL, query: "SELECT 1")
-        sqlite3_finalize(probe)
-        defer {
-            sqlite3_close(database)
-        }
-
-        var columns = Set<String>()
-        var pragmaStmt: OpaquePointer?
-        if sqlite3_prepare_v2(database, "PRAGMA table_info(conversation_summaries)", -1, &pragmaStmt, nil) == SQLITE_OK, let pStmt = pragmaStmt {
-            while sqlite3_step(pStmt) == SQLITE_ROW {
-                if let nameCol = sqlite3_column_text(pStmt, 1) {
-                    columns.insert(String(cString: nameCol))
-                }
-            }
-            sqlite3_finalize(pStmt)
-        }
-
+    private static func buildSummariesQuery(columns: Set<String>) -> String {
         let stepExpr = columns.contains("step_count") ? "step_count" : "0 AS step_count"
         let parentExpr = columns.contains("parent_conversation_id") ? "parent_conversation_id" : "''"
         let nameExpr = columns.contains("agent_name") ? "agent_name" : "''"
         let userInputExpr = columns.contains("last_user_input_time") ? "last_user_input_time" : "''"
-        let query = """
+        return """
         SELECT conversation_id, title, preview, workspace_uris, status, not_fully_idle, killed, last_modified_time, \(stepExpr), \(parentExpr), \(nameExpr), \(userInputExpr)
         FROM conversation_summaries
         ORDER BY last_modified_time DESC
         """
+    }
 
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, query, -1, &statement, nil) == SQLITE_OK, let stmt = statement else {
-            throw DatabaseError(description: "conversation_summaries.db: \(String(cString: sqlite3_errmsg(database)))")
+    private func readSummaries(dbURL: URL) throws -> [SummaryRow] {
+        cacheLock.lock()
+        let cachedColumns = schemaColumnsCache[dbURL.path]
+        cacheLock.unlock()
+
+        let database: OpaquePointer
+        let stmt: OpaquePointer
+
+        if let cachedColumns {
+            let query = Self.buildSummariesQuery(columns: cachedColumns)
+            if let prepared = try? openAndPrepare(dbURL: dbURL, query: query) {
+                database = prepared.db
+                stmt = prepared.statement
+            } else {
+                // 表结构可能变更或数据库不可读，清除缓存后重新探测
+                cacheLock.lock()
+                schemaColumnsCache.removeValue(forKey: dbURL.path)
+                cacheLock.unlock()
+                let probed = try openAndPrepareWithSchemaProbe(dbURL: dbURL)
+                database = probed.db
+                stmt = probed.statement
+            }
+        } else {
+            let probed = try openAndPrepareWithSchemaProbe(dbURL: dbURL)
+            database = probed.db
+            stmt = probed.statement
         }
+
         defer {
             sqlite3_finalize(stmt)
+            sqlite3_close(database)
         }
 
         var rows: [SummaryRow] = []
-        let dateFormatter = ISO8601DateFormatter()
-        dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        rows.reserveCapacity(128)
 
-        let fallbackFormatterWithFraction: DateFormatter = {
-            let df = DateFormatter()
-            df.locale = Locale(identifier: "en_US_POSIX")
-            df.timeZone = TimeZone(secondsFromGMT: 0)
-            df.dateFormat = "yyyy-MM-dd HH:mm:ss.SSSSSSZZZZZ"
-            return df
-        }()
-
-        let fallbackFormatterOffset: DateFormatter = {
-            let df = DateFormatter()
-            df.locale = Locale(identifier: "en_US_POSIX")
-            df.timeZone = TimeZone(secondsFromGMT: 0)
-            df.dateFormat = "yyyy-MM-dd HH:mm:ssZZZZZ"
-            return df
-        }()
-
-        let fallbackFormatterSimple: DateFormatter = {
-            let df = DateFormatter()
-            df.locale = Locale(identifier: "en_US_POSIX")
-            df.timeZone = TimeZone(secondsFromGMT: 0)
-            df.dateFormat = "yyyy-MM-dd HH:mm:ss"
-            return df
-        }()
-
-        func parseDate(_ s: String) -> Date? {
-            dateFormatter.date(from: s)
-                ?? fallbackFormatterWithFraction.date(from: s)
-                ?? fallbackFormatterOffset.date(from: s)
-                ?? fallbackFormatterSimple.date(from: s)
-        }
-
-        var rc = sqlite3_step(statement)
+        var rc = sqlite3_step(stmt)
         while rc == SQLITE_ROW {
-            defer { rc = sqlite3_step(statement) }
-            guard let idText = sqlite3_column_text(statement, 0) else { continue }
+            defer { rc = sqlite3_step(stmt) }
+            guard let idText = sqlite3_column_text(stmt, 0) else { continue }
             let convId = String(cString: idText)
-            let title = sqlite3_column_text(statement, 1).map { String(cString: $0) } ?? ""
-            let preview = sqlite3_column_text(statement, 2).map { String(cString: $0) } ?? ""
-            let wsUris = sqlite3_column_text(statement, 3).map { String(cString: $0) } ?? ""
-            let status = sqlite3_column_text(statement, 4).map { String(cString: $0) } ?? ""
-            let notIdle = sqlite3_column_int(statement, 5) != 0
-            let killed = sqlite3_column_int(statement, 6) != 0
+            let title = sqlite3_column_text(stmt, 1).map { String(cString: $0) } ?? ""
+            let preview = sqlite3_column_text(stmt, 2).map { String(cString: $0) } ?? ""
+            let wsUris = sqlite3_column_text(stmt, 3).map { String(cString: $0) } ?? ""
+            let status = sqlite3_column_text(stmt, 4).map { String(cString: $0) } ?? ""
+            let notIdle = sqlite3_column_int(stmt, 5) != 0
+            let killed = sqlite3_column_int(stmt, 6) != 0
 
             var modDate: Date? = nil
-            if let dateStr = sqlite3_column_text(statement, 7) {
-                let s = String(cString: dateStr)
-                modDate = parseDate(s)
+            if let dateStr = sqlite3_column_text(stmt, 7) {
+                modDate = FastDateParser.parse(cString: dateStr)
             }
 
-            let stepCount = Int(sqlite3_column_int(statement, 8))
+            let stepCount = Int(sqlite3_column_int(stmt, 8))
 
             var userInputDate: Date? = nil
-            if let dateStr = sqlite3_column_text(statement, 11) {
-                let s = String(cString: dateStr)
-                if let parsed = parseDate(s), parsed.timeIntervalSince1970 > 1577836800 { // after 2020-01-01
+            if let dateStr = sqlite3_column_text(stmt, 11) {
+                if let parsed = FastDateParser.parse(cString: dateStr), parsed.timeIntervalSince1970 > 1577836800 { // after 2020-01-01
                     userInputDate = parsed
                 }
             }
@@ -332,8 +390,8 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
                 killed: killed,
                 lastModified: modDate,
                 stepCount: stepCount,
-                parentConversationID: sqlite3_column_text(statement, 9).map { String(cString: $0) } ?? "",
-                agentName: sqlite3_column_text(statement, 10).map { String(cString: $0) } ?? "",
+                parentConversationID: sqlite3_column_text(stmt, 9).map { String(cString: $0) } ?? "",
+                agentName: sqlite3_column_text(stmt, 10).map { String(cString: $0) } ?? "",
                 lastUserInput: userInputDate
             ))
         }
@@ -342,6 +400,30 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
         }
 
         return rows
+    }
+
+    private func openAndPrepareWithSchemaProbe(dbURL: URL) throws -> (db: OpaquePointer, statement: OpaquePointer) {
+        let (database, pragmaStmt) = try openAndPrepare(dbURL: dbURL, query: "PRAGMA table_info(conversation_summaries)")
+        var columns = Set<String>()
+        while sqlite3_step(pragmaStmt) == SQLITE_ROW {
+            if let nameCol = sqlite3_column_text(pragmaStmt, 1) {
+                columns.insert(String(cString: nameCol))
+            }
+        }
+        sqlite3_finalize(pragmaStmt)
+
+        let query = Self.buildSummariesQuery(columns: columns)
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, query, -1, &statement, nil) == SQLITE_OK, let stmt = statement else {
+            let errMsg = String(cString: sqlite3_errmsg(database))
+            sqlite3_close(database)
+            throw DatabaseError(description: "conversation_summaries.db: \(errMsg)")
+        }
+
+        cacheLock.lock()
+        schemaColumnsCache[dbURL.path] = columns
+        cacheLock.unlock()
+        return (database, stmt)
     }
 
     private struct TranscriptInfo {
@@ -358,14 +440,12 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
         }
 
         var info = TranscriptInfo()
-        let isoStandard = ISO8601DateFormatter()
-        let isoFraction: ISO8601DateFormatter = {
-            let f = ISO8601DateFormatter()
-            f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            return f
-        }()
 
         for line in lines {
+            // 先用子串快速过滤，跳过无关的 SYSTEM / TOOL 等大体积步骤行
+            guard line.contains("\"PLANNER_RESPONSE\"") || line.contains("\"USER_INPUT\"") else {
+                continue
+            }
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty, let lineData = trimmed.data(using: .utf8),
                   let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else {
@@ -373,8 +453,6 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
             }
 
             let type = json["type"] as? String
-            let createdAtStr = json["created_at"] as? String
-            let createdAt = createdAtStr.flatMap { isoStandard.date(from: $0) ?? isoFraction.date(from: $0) }
 
             if type == "PLANNER_RESPONSE" {
                 if let toolCalls = json["tool_calls"] as? [[String: Any]] {
@@ -382,7 +460,7 @@ public final class AntigravityAdapter: AgentAdapter, @unchecked Sendable {
                         let callName = call["tool_name"] as? String ?? call["name"] as? String ?? ""
                         if callName == "ask_question" || callName == "ask_user_question" {
                             info.isWaiting = true
-                            info.waitingSince = createdAt
+                            info.waitingSince = FastDateParser.parse(json["created_at"] as? String)
                             if let args = call["arguments"] as? [String: Any] ?? call["parameters"] as? [String: Any] {
                                 info.waitingText = args["question"] as? String ?? args["prompt"] as? String
                             }

@@ -5,23 +5,36 @@ public final class FileWatcher: @unchecked Sendable {
     private let paths: [String]
     private let debounceInterval: TimeInterval
     private let queue: DispatchQueue
-    private let onChange: @Sendable () -> Void
+    private let onChangeWithPaths: @Sendable (Set<String>) -> Void
 
     private var eventStream: FSEventStreamRef?
     private var debounceTimer: DispatchSourceTimer?
+    private var pendingPaths: Set<String> = []
     private let lock = NSLock()
     private var isStarted = false
 
-    public init(
+    public convenience init(
         paths: [URL],
         debounceInterval: TimeInterval = 0.3,
         queue: DispatchQueue = DispatchQueue(label: "com.agentmonitor.filewatcher", qos: .utility),
         onChange: @escaping @Sendable () -> Void
     ) {
+        self.init(paths: paths, debounceInterval: debounceInterval, queue: queue) { _ in
+            onChange()
+        }
+    }
+
+    /// 支持将防抖窗口内触发的所有变更路径集合传递给调用方，用于按路径定向扫描对应 Adapter。
+    public init(
+        paths: [URL],
+        debounceInterval: TimeInterval = 0.3,
+        queue: DispatchQueue = DispatchQueue(label: "com.agentmonitor.filewatcher", qos: .utility),
+        onChangeWithPaths: @escaping @Sendable (Set<String>) -> Void
+    ) {
         self.paths = paths.map { $0.path }
         self.debounceInterval = debounceInterval
         self.queue = queue
-        self.onChange = onChange
+        self.onChangeWithPaths = onChangeWithPaths
     }
 
     deinit {
@@ -48,10 +61,11 @@ public final class FileWatcher: @unchecked Sendable {
             kFSEventStreamCreateFlagNoDefer
         )
 
-        let callback: FSEventStreamCallback = { (streamRef, clientCallBackInfo, numEvents, eventPaths, eventFlags, eventIds) in
+        let callback: FSEventStreamCallback = { (_, clientCallBackInfo, _, eventPaths, _, _) in
             guard let clientCallBackInfo = clientCallBackInfo else { return }
             let watcher = Unmanaged<FileWatcher>.fromOpaque(clientCallBackInfo).takeUnretainedValue()
-            watcher.handleEvents()
+            let changed = (Unmanaged<CFArray>.fromOpaque(eventPaths).takeUnretainedValue() as? [String]) ?? []
+            watcher.handleEvents(changedPaths: changed)
         }
 
         guard let stream = FSEventStreamCreate(
@@ -77,6 +91,7 @@ public final class FileWatcher: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
+        pendingPaths.removeAll()
         if let timer = debounceTimer {
             timer.cancel()
             debounceTimer = nil
@@ -91,28 +106,43 @@ public final class FileWatcher: @unchecked Sendable {
         isStarted = false
     }
 
-    private func handleEvents() {
-        queue.async { [weak self] in
-            guard let self = self else { return }
-            self.lock.lock()
-            defer { self.lock.unlock() }
+    private func handleEvents(changedPaths: [String]) {
+        lock.lock()
+        guard isStarted else {
+            lock.unlock()
+            return
+        }
+        for path in changedPaths {
+            pendingPaths.insert(path)
+        }
 
-            if let timer = self.debounceTimer {
-                timer.cancel()
-            }
-
-            let timer = DispatchSource.makeTimerSource(queue: self.queue)
-            timer.schedule(deadline: .now() + self.debounceInterval)
+        // 复用已激活的防抖定时器，仅重设触发截止时间，避免高频事件下反复销毁与重建内核 Timer
+        if let timer = debounceTimer {
+            timer.schedule(deadline: .now() + debounceInterval)
+        } else {
+            let timer = DispatchSource.makeTimerSource(queue: queue)
+            timer.schedule(deadline: .now() + debounceInterval)
             timer.setEventHandler { [weak self] in
-                guard let self = self else { return }
-                self.lock.lock()
-                self.debounceTimer = nil
-                self.lock.unlock()
-
-                self.onChange()
+                self?.fireDebouncedCallback()
             }
-            self.debounceTimer = timer
+            debounceTimer = timer
             timer.resume()
         }
+        lock.unlock()
+    }
+
+    private func fireDebouncedCallback() {
+        lock.lock()
+        guard isStarted else {
+            lock.unlock()
+            return
+        }
+        let batch = pendingPaths
+        pendingPaths.removeAll()
+        // 将已触发的单次定时器置为远期休眠以备下次直接重用 schedule
+        debounceTimer?.schedule(deadline: .distantFuture)
+        lock.unlock()
+
+        onChangeWithPaths(batch)
     }
 }

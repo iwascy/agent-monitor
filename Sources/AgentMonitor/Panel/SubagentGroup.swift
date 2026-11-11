@@ -100,6 +100,7 @@ private struct SubagentRow: View {
     let session: AgentSession
     let depth: Int
     var onSelect: (() -> Void)? = nil
+    @Environment(\.isPanelVisible) private var isPanelVisible
 
     var body: some View {
         Button(action: {
@@ -157,15 +158,23 @@ private struct SubagentRow: View {
     private var timeText: some View {
         switch session.state {
         case .running:
-            TimelineView(.periodic(from: .now, by: 1)) { context in
-                let elapsed = max(0, Int(context.date.timeIntervalSince(session.stateSince)))
-                Text(String(format: "%d:%02d", elapsed / 60, elapsed % 60))
-                    .font(.system(size: 11)).monospacedDigit().foregroundColor(.blue)
+            if isPanelVisible {
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    runningElapsedText(now: context.date)
+                }
+            } else {
+                runningElapsedText(now: Date())
             }
         case .waitingForUser:
             Text(session.formattedTime).font(.system(size: 11, weight: .medium)).foregroundColor(.orange)
         default:
             Text("完成").font(.system(size: 11)).foregroundColor(.secondary)
         }
+    }
+
+    private func runningElapsedText(now: Date) -> some View {
+        let elapsed = max(0, Int(now.timeIntervalSince(session.stateSince)))
+        return Text(String(format: "%d:%02d", elapsed / 60, elapsed % 60))
+            .font(.system(size: 11)).monospacedDigit().foregroundColor(.blue)
     }
 }

@@ -10,9 +10,73 @@ struct TerminalSessionIdentity: Sendable {
 
 enum TerminalSessionNavigator {
     static func identity(processID: Int32) -> TerminalSessionIdentity? {
+        // 优先通过原生 sysctl + proc_pidpath 读取进程树，失败时再回退 /bin/ps 子进程
+        if let listing = nativeProcessListing() {
+            return resolveIdentity(processID: processID, listing: listing) { warpEnvironment(pid: $0) }
+        }
         let result = NavigationCommand.run("/bin/ps", ["-axo", "pid=,ppid=,tty=,comm="])
         guard result.succeeded else { return nil }
         return resolveIdentity(processID: processID, listing: result.output) { warpEnvironment(pid: $0) }
+    }
+
+    /// 使用 Darwin 原生 sysctl 枚举系统进程表，避免启动外部 /bin/ps 进程。
+    static func nativeProcessListing() -> String? {
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
+        var byteCount = 0
+        guard sysctl(&mib, u_int(mib.count), nil, &byteCount, nil, 0) == 0, byteCount > 0 else {
+            return nil
+        }
+
+        // 预留余量以防两次调用之间新进程派生导致 ENOMEM
+        let stride = MemoryLayout<kinfo_proc>.stride
+        let capacity = (byteCount / stride) + 64
+        var procs = [kinfo_proc](repeating: kinfo_proc(), count: capacity)
+        var actualBytes = capacity * stride
+        let status = procs.withUnsafeMutableBytes { buf in
+            sysctl(&mib, u_int(mib.count), buf.baseAddress, &actualBytes, nil, 0)
+        }
+        guard status == 0, actualBytes >= stride else { return nil }
+
+        let count = actualBytes / stride
+        var lines: [String] = []
+        lines.reserveCapacity(count)
+        var pathBuffer = [UInt8](repeating: 0, count: Int(MAXPATHLEN) * 4)
+
+        for i in 0..<count {
+            let info = procs[i]
+            let pid = info.kp_proc.p_pid
+            guard pid > 0 else { continue }
+            let ppid = info.kp_eproc.e_ppid
+
+            let tdev = info.kp_eproc.e_tdev
+            let tty: String
+            if tdev == -1 || tdev == 0 {
+                tty = "??"
+            } else if let cName = devname(tdev, S_IFCHR) {
+                let name = String(cString: cName)
+                tty = name.isEmpty ? "??" : name
+            } else {
+                tty = "??"
+            }
+
+            let pathLen = pathBuffer.withUnsafeMutableBytes { buf in
+                proc_pidpath(pid, buf.baseAddress, UInt32(buf.count))
+            }
+            let comm: String
+            if pathLen > 0 {
+                comm = String(decoding: pathBuffer[0..<Int(pathLen)], as: UTF8.self)
+            } else {
+                comm = withUnsafePointer(to: info.kp_proc.p_comm) { ptr in
+                    ptr.withMemoryRebound(to: CChar.self, capacity: MemoryLayout.size(ofValue: info.kp_proc.p_comm)) { cPtr in
+                        String(cString: cPtr)
+                    }
+                }
+            }
+            guard !comm.isEmpty else { continue }
+            lines.append("\(pid) \(ppid) \(tty) \(comm)")
+        }
+
+        return lines.isEmpty ? nil : lines.joined(separator: "\n")
     }
 
     static func resolveIdentity(processID: Int32, listing: String, warpEnvironment: (Int32) -> String?) -> TerminalSessionIdentity? {

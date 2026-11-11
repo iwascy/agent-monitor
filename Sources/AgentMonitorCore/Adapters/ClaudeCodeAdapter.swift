@@ -39,6 +39,8 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
     }
 
     private var transcriptCache: [String: TranscriptCacheEntry] = [:]
+    private var sessionMetaCache: [String: (stamp: FileStamp, meta: ClaudeSessionJSON)] = [:]
+    private var parsedTranscriptCache: [String: (stamp: FileStamp, summary: TranscriptSummary)] = [:]
     private let transcriptCacheLock = NSLock()
 
     public init(
@@ -81,7 +83,7 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
         do {
             sessionFiles = try fm.contentsOfDirectory(
                 at: sessionsDirectory,
-                includingPropertiesForKeys: [.contentModificationDateKey],
+                includingPropertiesForKeys: nil,
                 options: [.skipsHiddenFiles]
             ).filter { $0.pathExtension == "json" }
         } catch {
@@ -91,12 +93,16 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
         var results: [AgentSession] = []
         let now = Date()
         let hookStates = hookReader.poll()
+        var activeSessionIDs = Set<String>()
+        var activeMetaPaths = Set<String>()
+        var activeTranscriptPaths = Set<String>()
 
         for fileURL in sessionFiles {
-            guard let data = try? Data(contentsOf: fileURL),
-                  let sessionMeta = try? JSONDecoder().decode(ClaudeSessionJSON.self, from: data) else {
+            guard let metaStamp = FileUtils.fastStat(path: fileURL.path),
+                  let sessionMeta = cachedSessionMeta(fileURL: fileURL, stamp: metaStamp) else {
                 continue
             }
+            activeMetaPaths.insert(fileURL.path)
 
             // Liveness check
             guard isPidAlive(Int32(sessionMeta.pid)) else {
@@ -104,8 +110,7 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
             }
 
             var updatedAt = sessionMeta.updatedAt.map { Date(timeIntervalSince1970: Double($0) / 1000.0) }
-                ?? (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
-                ?? now
+                ?? metaStamp.modificationDate
 
             // Discard sessions older than max age
             if now.timeIntervalSince(updatedAt) > maxAgeSeconds {
@@ -116,19 +121,24 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
             let waitingFor = sessionMeta.waitingFor
             let sessionId = sessionMeta.sessionId
             let cwd = sessionMeta.cwd
+            activeSessionIDs.insert(sessionId)
 
             let hookState = hookStates[sessionId]
 
             // Locate transcript: 优先使用 hookState 中的 transcriptPath（存在且文件存在时）
             var transcriptURL: URL? = nil
+            var transcriptStamp: FileStamp? = nil
             if let hookTranscript = hookState?.transcriptPath, !hookTranscript.isEmpty {
-                let candidateURL = URL(fileURLWithPath: hookTranscript)
-                if fm.fileExists(atPath: candidateURL.path) {
-                    transcriptURL = candidateURL
+                if let stamp = FileUtils.fastStat(path: hookTranscript), !stamp.isDirectory {
+                    transcriptURL = URL(fileURLWithPath: hookTranscript)
+                    transcriptStamp = stamp
                 }
             }
             if transcriptURL == nil {
-                transcriptURL = locateTranscript(sessionId: sessionId, cwd: cwd, fm: fm)
+                if let located = locateTranscript(sessionId: sessionId, cwd: cwd, fm: fm) {
+                    transcriptURL = located
+                    transcriptStamp = FileUtils.fastStat(path: located.path)
+                }
             }
 
             var resolvedTitle = sessionMeta.name?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -144,7 +154,13 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
             var detailIsCommand = false
             var waitingLabel: String? = nil
 
-            let transcriptSummary = transcriptURL != nil ? parseTranscript(transcriptURL: transcriptURL!) : nil
+            let transcriptSummary: TranscriptSummary?
+            if let tURL = transcriptURL, let tStamp = transcriptStamp {
+                activeTranscriptPaths.insert(tURL.path)
+                transcriptSummary = cachedParseTranscript(transcriptURL: tURL, stamp: tStamp)
+            } else {
+                transcriptSummary = nil
+            }
 
             if let transcriptTitle = transcriptSummary?.customTitle, !transcriptTitle.isEmpty {
                 resolvedTitle = transcriptTitle
@@ -192,7 +208,7 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
                         state = .running
                         detail = ts.runningDetail ?? "正在思考…"
                     } else {
-                        let transcriptMtime = (try? transcriptURL?.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? updatedAt
+                        let transcriptMtime = transcriptStamp?.modificationDate ?? updatedAt
                         if now.timeIntervalSince(transcriptMtime) >= waitingThreshold {
                             state = .waitingForUser
                             waitingLabel = ts.isUserQuestion ? "在问你" : "等待授权"
@@ -224,7 +240,7 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
                     statusDate = updatedAt
                 }
                 let thresholdDate = statusDate.addingTimeInterval(-1.0)
-                let transcriptMtime = try? transcriptURL?.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+                let transcriptMtime = transcriptStamp?.modificationDate
 
                 // 等待类 Hook 有效性判定：
                 // - 若 <pid>.json 当前就是 waiting（非 dialog open），允许同秒内（statusDate - 1s）的 Hook 补充详情；
@@ -320,7 +336,67 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
             results.append(session)
         }
 
+        pruneCachesIfNeeded(
+            activeSessionIDs: activeSessionIDs,
+            activeMetaPaths: activeMetaPaths,
+            activeTranscriptPaths: activeTranscriptPaths
+        )
         return results
+    }
+
+    private func cachedSessionMeta(fileURL: URL, stamp: FileStamp) -> ClaudeSessionJSON? {
+        let path = fileURL.path
+        transcriptCacheLock.lock()
+        if let hit = sessionMetaCache[path], hit.stamp == stamp {
+            transcriptCacheLock.unlock()
+            return hit.meta
+        }
+        transcriptCacheLock.unlock()
+
+        guard let data = try? Data(contentsOf: fileURL),
+              let decoded = try? JSONDecoder().decode(ClaudeSessionJSON.self, from: data) else {
+            return nil
+        }
+
+        transcriptCacheLock.lock()
+        sessionMetaCache[path] = (stamp, decoded)
+        transcriptCacheLock.unlock()
+        return decoded
+    }
+
+    private func cachedParseTranscript(transcriptURL: URL, stamp: FileStamp) -> TranscriptSummary {
+        let path = transcriptURL.path
+        transcriptCacheLock.lock()
+        if let hit = parsedTranscriptCache[path], hit.stamp == stamp {
+            transcriptCacheLock.unlock()
+            return hit.summary
+        }
+        transcriptCacheLock.unlock()
+
+        let summary = parseTranscript(transcriptURL: transcriptURL)
+
+        transcriptCacheLock.lock()
+        parsedTranscriptCache[path] = (stamp, summary)
+        transcriptCacheLock.unlock()
+        return summary
+    }
+
+    private func pruneCachesIfNeeded(
+        activeSessionIDs: Set<String>,
+        activeMetaPaths: Set<String>,
+        activeTranscriptPaths: Set<String>
+    ) {
+        transcriptCacheLock.lock()
+        defer { transcriptCacheLock.unlock() }
+        if transcriptCache.count > 256 {
+            transcriptCache = transcriptCache.filter { activeSessionIDs.contains($0.key) }
+        }
+        if sessionMetaCache.count > 128 {
+            sessionMetaCache = sessionMetaCache.filter { activeMetaPaths.contains($0.key) }
+        }
+        if parsedTranscriptCache.count > 128 {
+            parsedTranscriptCache = parsedTranscriptCache.filter { activeTranscriptPaths.contains($0.key) }
+        }
     }
 
     private func locateTranscript(sessionId: String, cwd: String?, fm: FileManager) -> URL? {
@@ -396,6 +472,15 @@ public final class ClaudeCodeAdapter: AgentAdapter, @unchecked Sendable {
         var pendingToolUses: [String: (name: String, detail: String, isCmd: Bool, isQuestion: Bool, isBgOrSubagent: Bool)] = [:]
 
         for line in lines {
+            if summary.hasContent {
+                let isRelevant = line.contains("\"assistant\"")
+                    || line.contains("\"user\"")
+                    || line.contains("\"system\"")
+                    || line.contains("\"custom-title\"")
+                    || line.contains("\"permission-mode\"")
+                    || line.contains("\"mode\"")
+                if !isRelevant { continue }
+            }
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty, let lineData = trimmed.data(using: .utf8),
                   let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else {

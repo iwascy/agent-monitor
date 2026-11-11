@@ -4,9 +4,11 @@ import SwiftUI
 // the dot's position while MenuBarExtra restores and lays out its window on wake.
 struct PulsingDotView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isPanelVisible) private var isPanelVisible
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion)) { timeline in
+        // 面板收起驻留后台时暂停 30fps 时间轴刷新，消除静默 CPU 唤醒
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion || !isPanelVisible)) { timeline in
             Canvas { context, size in
                 let phase = timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.8) / 1.8
                 let eased = 1 - pow(1 - phase, 3)

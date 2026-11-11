@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import AgentMonitorCore
 @testable import AgentMonitor
@@ -32,18 +33,21 @@ struct MonitorViewModelTests {
         #expect(MonitorViewModel.shouldShowMarkAllAsRead(sessions: withoutDone, filterState: nil) == false)
     }
 
-    @Test("Panel appear and disappear toggles SessionStore isPanelVisible")
+    @Test("Panel appear and disappear toggles SessionStore and ViewModel isPanelVisible")
     func testPanelVisibilityToggle() {
         let store = SessionStore(adapters: [])
         let vm = MonitorViewModel(sessionStore: store)
 
         #expect(store.isPanelVisible == false)
+        #expect(vm.isPanelVisible == false)
 
         vm.onPanelAppear()
         #expect(store.isPanelVisible == true)
+        #expect(vm.isPanelVisible == true)
 
         vm.onPanelDisappear()
         #expect(store.isPanelVisible == false)
+        #expect(vm.isPanelVisible == false)
     }
 
     @Test("Mute rules filter sessions from panel and menu bar")
@@ -112,5 +116,48 @@ struct MonitorViewModelTests {
         #expect(vm.sessions.first?.state == .idle)
         #expect(vm.sessions.first?.subagents.first?.state == .idle)
         #expect(vm.sessions.first?.subagents.first?.subagents.first?.state == .idle)
+    }
+
+    @Test("Precomputed hierarchy index handles counts, menuBarStateSummary, and cyclic parent links")
+    func testHierarchyIndexAndMenuSummary() {
+        let previous = AppSettings.shared.muteRules
+        defer { AppSettings.shared.muteRules = previous }
+        AppSettings.shared.muteRules = []
+
+        let vm = MonitorViewModel(sessionStore: SessionStore(adapters: []))
+        let rootRun = AgentSession(id: "root-run", kind: .claudeCode, title: "Root", state: .running)
+        let childWait = AgentSession(id: "child-wait", kind: .claudeCode, title: "Child", state: .waitingForUser, parentSessionID: "root-run")
+        // 构造互相指向的异常环形 parentSessionID，验证不会死循环且降级作为根节点展示
+        let cycleA = AgentSession(id: "cycle-a", kind: .codex, title: "Cycle A", state: .completed, parentSessionID: "cycle-b")
+        let cycleB = AgentSession(id: "cycle-b", kind: .codex, title: "Cycle B", state: .idle, parentSessionID: "cycle-a")
+
+        vm.updateSessionsManually([rootRun, childWait, cycleA, cycleB])
+
+        #expect(vm.sessionCount(for: .running) == 1)
+        #expect(vm.sessionCount(for: .waitingForUser) == 1)
+        #expect(vm.sessionCount(for: .completed) == 1)
+        #expect(vm.sessionCount(for: .idle) == 1)
+        #expect(vm.depth(of: rootRun) == 0)
+        #expect(vm.depth(of: childWait) == 1)
+        #expect(vm.depth(of: cycleA) == 0)
+        #expect(vm.depth(of: cycleB) == 0)
+
+        // 筛选 waitingForUser 时，子树包含 waitingForUser 的 rootRun 应被返回
+        vm.filterState = .waitingForUser
+        #expect(vm.roots(in: .waitingForUser).map(\.id) == ["root-run"])
+
+        let summary = vm.menuBarStateSummary
+        #expect(summary.highestState == .waitingForUser)
+        #expect(summary.waitingCount == (AppSettings.shared.showWaitingCountInMenuBar ? 1 : 0))
+    }
+
+    @Test("Native sysctl process listing includes current process")
+    func testNativeProcessListingIncludesSelf() throws {
+        let listing = try #require(TerminalSessionNavigator.nativeProcessListing())
+        let selfPID = Foundation.ProcessInfo.processInfo.processIdentifier
+        let hasSelf = listing.split(separator: "\n").contains { line in
+            line.split(maxSplits: 1, whereSeparator: { $0 == " " || $0 == "\t" }).first == Substring(String(selfPID))
+        }
+        #expect(hasSelf == true)
     }
 }

@@ -5,11 +5,23 @@ const path = require('node:path');
 const os = require('node:os');
 
 const MAX = 64 * 1024 * 1024;
-function checksum(b) {
-  let crc = 0xffffffff;
-  for (const byte of b) {
-    crc ^= byte;
+// 预计算 256 项 CRC32C 查表，消除逐 bit 循环开销
+const CRC32C_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let crc = i;
     for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ (crc & 1 ? 0x82f63b78 : 0);
+    table[i] = crc >>> 0;
+  }
+  return table;
+})();
+function checksum(b, prefixByte) {
+  let crc = 0xffffffff;
+  if (prefixByte !== undefined) {
+    crc = CRC32C_TABLE[(crc ^ prefixByte) & 0xff] ^ (crc >>> 8);
+  }
+  for (let i = 0; i < b.length; i++) {
+    crc = CRC32C_TABLE[(crc ^ b[i]) & 0xff] ^ (crc >>> 8);
   }
   crc = (~crc) >>> 0;
   return (((crc >>> 15) | (crc << 17)) + 0xa282ead8) >>> 0;
@@ -47,7 +59,8 @@ function snappy(b) {
     if (type === 1) { n = 4 + ((tag >>> 2) & 7); offset = ((tag & 224) << 3) + slice(b, c, 1)[0]; }
     else { n = 1 + (tag >>> 2); offset = slice(b, c, type === 2 ? 2 : 4).readUIntLE(0, type === 2 ? 2 : 4); }
     if (!offset || offset > p || p + n > size) throw Error('invalid copy');
-    for (let i = 0; i < n; i++) { out[p] = out[p - offset]; p++; }
+    if (offset >= n) { out.copy(out, p, p - offset, p - offset + n); p += n; }
+    else { for (let i = 0; i < n; i++) { out[p] = out[p - offset]; p++; } }
   }
   if (p !== size || c.p !== b.length) throw Error('incomplete snappy block');
   return out;
@@ -61,7 +74,7 @@ function records(b) {
       if (!type && !n) break;
       if (p + n > end) break; // concurrent/incomplete final write
       const part = b.subarray(p, p + n);
-      if (b.readUInt32LE(p - 7) !== checksum(Buffer.concat([Buffer.from([type]),part]))) throw Error("invalid log checksum");
+      if (b.readUInt32LE(p - 7) !== checksum(part, type)) throw Error("invalid log checksum");
       p += n;
       if (type === 1) { result.push(part); fragments = null; }
       else if (type === 2) fragments = [part];

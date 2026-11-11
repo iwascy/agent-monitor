@@ -65,8 +65,9 @@ struct SessionNavigationResolver: Sendable {
 
     func claudeDesktopID(for nativeID: String) -> String? {
         let root = home.appendingPathComponent("Library/Application Support/Claude/claude-code-sessions")
+        let needle = Data(nativeID.utf8)
         let matches = jsonFiles(in: root).compactMap { file -> String? in
-            guard let json = readJSON(file), json["isArchived"] as? Bool != true,
+            guard let json = readJSON(file, containing: needle), json["isArchived"] as? Bool != true,
                   json["cliSessionId"] as? String == nativeID,
                   let id = json["sessionId"] as? String,
                   id.hasPrefix("local_"), UUID(uuidString: String(id.dropFirst(6))) != nil else { return nil }
@@ -78,8 +79,9 @@ struct SessionNavigationResolver: Sendable {
 
     func claudeProcessID(for nativeID: String) -> Int32? {
         let root = home.appendingPathComponent(".claude/sessions")
+        let needle = Data(nativeID.utf8)
         let matches = jsonFiles(in: root).compactMap { file -> Int32? in
-            guard let json = readJSON(file), json["sessionId"] as? String == nativeID,
+            guard let json = readJSON(file, containing: needle), json["sessionId"] as? String == nativeID,
                   let pid = json["pid"] as? Int, let value = Int32(exactly: pid), value > 1,
                   kill(value, 0) == 0 else { return nil }
             return value
@@ -89,8 +91,9 @@ struct SessionNavigationResolver: Sendable {
 
     func paseoLink(for nativeID: String) -> URL? {
         let root = home.appendingPathComponent(".paseo/agents")
+        let needle = Data(nativeID.utf8)
         let matches = jsonFiles(in: root).compactMap { file -> String? in
-            guard let json = readJSON(file), (json["archivedAt"] as? String)?.isEmpty != false,
+            guard let json = readJSON(file, containing: needle), (json["archivedAt"] as? String)?.isEmpty != false,
                   json["archived"] as? Bool != true, json["isArchived"] as? Bool != true,
                   let runtime = json["runtimeInfo"] as? [String: Any],
                   let session = runtime["sessionId"] as? String,
@@ -136,8 +139,11 @@ struct SessionNavigationResolver: Sendable {
         return enumerator.compactMap { $0 as? URL }.filter { $0.pathExtension == "json" }
     }
 
-    private func readJSON(_ file: URL) -> [String: Any]? {
-        guard let data = try? Data(contentsOf: file) else { return nil }
+    /// 先按原始字节子串预筛目标 ID，命中后再执行完整 JSON 反序列化。
+    private func readJSON(_ file: URL, containing needle: Data) -> [String: Any]? {
+        guard let data = try? Data(contentsOf: file, options: .mappedIfSafe),
+              !needle.isEmpty,
+              data.range(of: needle) != nil else { return nil }
         return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     }
 }

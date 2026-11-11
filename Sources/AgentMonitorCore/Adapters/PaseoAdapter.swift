@@ -62,6 +62,19 @@ public final class PaseoAdapter: AgentAdapter, @unchecked Sendable {
     private var refreshing = false
     private var lastRefresh = Date.distantPast
     private var hasSnapshot = false
+    private var _isPanelVisible = false
+    private var lastLevelDBStamp: FileStamp?
+    private var localDirCache: [String: (stamp: FileStamp, subdirs: [URL], jsonFiles: [URL])] = [:]
+    private var localAgentCache: [String: (stamp: FileStamp, agent: PaseoAgentSnapshot)] = [:]
+    private var serverIDCache: (stamp: FileStamp, id: String)?
+
+    /// 异步网络快照完成且会话结果发生变更时的回调（仅由异步刷新触发，不影响同步单元测试）。
+    public var onSnapshotUpdated: (@Sendable () -> Void)?
+
+    public var isPanelVisible: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _isPanelVisible }
+        set { lock.lock(); _isPanelVisible = newValue; lock.unlock() }
+    }
 
     public init(home: URL = FileManager.default.homeDirectoryForCurrentUser,
                 application: URL = URL(fileURLWithPath: "/Applications/Paseo.app")) {
@@ -69,43 +82,178 @@ public final class PaseoAdapter: AgentAdapter, @unchecked Sendable {
         self.application = application
     }
 
+    /// 根据面板可见性与主机连接健康度动态调整桥接进程轮询间隔，避免在后台或存在离线主机时频繁派生 Electron 进程。
+    private func currentRefreshInterval() -> TimeInterval {
+        guard hasSnapshot else { return 0 }
+        let hasOfflineHost = hosts.contains { !$0.connected }
+        if _isPanelVisible {
+            return hasOfflineHost ? 15.0 : 8.0
+        } else {
+            return hasOfflineHost ? 60.0 : 30.0
+        }
+    }
+
+    /// 当无远程主机且本机 Paseo 守护进程未运行、LevelDB 注册表也未变化时，跳过派生桥接子进程。
+    private func canSkipIdleLocalProbe() -> Bool {
+        guard hasSnapshot else { return false }
+        let hasRemote = hosts.contains { !$0.isLocal }
+        let anyConnected = hosts.contains { $0.connected }
+        guard !hasRemote && !anyConnected else { return false }
+
+        let levelDBPath = home.appendingPathComponent("Library/Application Support/Paseo/Local Storage/leveldb").path
+        let currentLevelDBStamp = FileUtils.fastStat(path: levelDBPath)
+        if currentLevelDBStamp != lastLevelDBStamp {
+            return false
+        }
+
+        if isLocalDaemonRunning() {
+            return false
+        }
+        return true
+    }
+
+    private func isLocalDaemonRunning() -> Bool {
+        let pidURL = home.appendingPathComponent(".paseo/paseo.pid")
+        guard let data = try? Data(contentsOf: pidURL) else { return false }
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let pid = json["pid"] as? Int, pid > 1 {
+            return kill(Int32(pid), 0) == 0
+        }
+        if let raw = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           let pid = Int32(raw), pid > 1 {
+            return kill(pid, 0) == 0
+        }
+        return false
+    }
+
     public func scan() throws -> [AgentSession] {
         lock.lock()
         defer { lock.unlock() }
-        if !refreshing && Date().timeIntervalSince(lastRefresh) >= 5,
+        let now = Date()
+        let interval = currentRefreshInterval()
+        if !refreshing && now.timeIntervalSince(lastRefresh) >= interval,
            FileManager.default.fileExists(atPath: application.path) {
-            refreshing = true
-            queue.async { [weak self] in self?.refreshSnapshot() }
+            if canSkipIdleLocalProbe() {
+                lastRefresh = now
+            } else {
+                refreshing = true
+                lastLevelDBStamp = FileUtils.fastStat(
+                    path: home.appendingPathComponent("Library/Application Support/Paseo/Local Storage/leveldb").path
+                )
+                queue.async { [weak self] in self?.refreshSnapshot() }
+            }
         }
-        var result = cached
         // Local files are also available before the first network snapshot and
         // when Paseo's SDK changes. Only inspect .paseo/agents, never provider history.
-        let local = localSessions()
-        if !hasSnapshot { return local }
-        let ids = Set(result.map(\.id))
+        if !hasSnapshot {
+            return localSessions()
+        }
+        var result = cached
         let connectedLocal = hosts.contains { $0.isLocal && $0.connected }
-        if !connectedLocal { result += local.filter { !ids.contains($0.id) } }
+        if !connectedLocal {
+            let ids = Set(result.map(\.id))
+            let local = localSessions()
+            result += local.filter { !ids.contains($0.id) }
+        }
         return result
     }
 
     private func localSessions() -> [AgentSession] {
-        guard let serverID = try? String(contentsOf: home.appendingPathComponent(".paseo/server-id"), encoding: .utf8)
-            .trimmingCharacters(in: .whitespacesAndNewlines), !serverID.isEmpty else { return [] }
-        let root = home.appendingPathComponent(".paseo/agents")
-        guard let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil,
-                                                        options: [.skipsHiddenFiles]) else { return [] }
-        return files.compactMap { entry -> AgentSession? in
-            guard let file = entry as? URL, file.pathExtension == "json",
-                  let data = try? Data(contentsOf: file), let agent = try? JSONDecoder().decode(PaseoAgentSnapshot.self, from: data) else { return nil }
-            return agent.session(serverID: serverID, hostName: "本机", isLocal: true, connected: false)
+        let serverIDPath = home.appendingPathComponent(".paseo/server-id")
+        guard let sidStamp = FileUtils.fastStat(path: serverIDPath.path) else { return [] }
+        let serverID: String
+        if let cachedSID = serverIDCache, cachedSID.stamp == sidStamp {
+            serverID = cachedSID.id
+        } else {
+            guard let raw = try? String(contentsOf: serverIDPath, encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return [] }
+            serverIDCache = (sidStamp, raw)
+            serverID = raw
         }
+
+        let root = home.appendingPathComponent(".paseo/agents")
+        let fm = FileManager.default
+        guard FileUtils.fastStat(path: root.path)?.isDirectory == true else { return [] }
+
+        // 递归遍历 .paseo/agents/<workspace>/*.json（兼容顶层与工作区子目录结构），并按目录 FileStamp 缓存
+        var jsonFiles: [URL] = []
+        var stack: [URL] = [root]
+        var visitedDirs = Set<String>()
+
+        while let dir = stack.popLast() {
+            let dirPath = dir.path
+            guard visitedDirs.insert(dirPath).inserted,
+                  let dirStamp = FileUtils.fastStat(path: dirPath), dirStamp.isDirectory else { continue }
+
+            let cachedEntry: (stamp: FileStamp, subdirs: [URL], jsonFiles: [URL])
+            if let hit = localDirCache[dirPath], hit.stamp == dirStamp {
+                cachedEntry = hit
+            } else {
+                let children = (try? fm.contentsOfDirectory(
+                    at: dir,
+                    includingPropertiesForKeys: nil,
+                    options: [.skipsHiddenFiles]
+                )) ?? []
+                var subdirs: [URL] = []
+                var jsons: [URL] = []
+                for child in children {
+                    if child.pathExtension == "json" {
+                        jsons.append(child)
+                    } else if FileUtils.fastStat(path: child.path)?.isDirectory == true {
+                        subdirs.append(child)
+                    }
+                }
+                cachedEntry = (dirStamp, subdirs, jsons)
+                localDirCache[dirPath] = cachedEntry
+            }
+            stack.append(contentsOf: cachedEntry.subdirs)
+            jsonFiles.append(contentsOf: cachedEntry.jsonFiles)
+        }
+
+        if localDirCache.count > 128 {
+            localDirCache = localDirCache.filter { visitedDirs.contains($0.key) }
+        }
+
+        var activePaths = Set<String>()
+        var sessions: [AgentSession] = []
+        let decoder = JSONDecoder()
+        for file in jsonFiles {
+            let path = file.path
+            activePaths.insert(path)
+            guard let stamp = FileUtils.fastStat(path: path), !stamp.isDirectory else { continue }
+            let agent: PaseoAgentSnapshot
+            if let hit = localAgentCache[path], hit.stamp == stamp {
+                agent = hit.agent
+            } else {
+                guard let data = try? Data(contentsOf: file),
+                      let decoded = try? decoder.decode(PaseoAgentSnapshot.self, from: data) else { continue }
+                localAgentCache[path] = (stamp, decoded)
+                agent = decoded
+            }
+            if let session = agent.session(serverID: serverID, hostName: "本机", isLocal: true, connected: false) {
+                sessions.append(session)
+            }
+        }
+        if localAgentCache.count > 128 {
+            localAgentCache = localAgentCache.filter { activePaths.contains($0.key) }
+        }
+        return sessions
     }
 
     public func refreshNow() { refreshSnapshot() }
 
     private func refreshSnapshot() {
         let snapshot = Self.readSnapshot(home: home, application: application)
+        let before: [AgentSession] = {
+            lock.lock(); defer { lock.unlock() }; return cached
+        }()
         applySnapshot(snapshot)
+        let (after, callback): ([AgentSession], (@Sendable () -> Void)?) = {
+            lock.lock(); defer { lock.unlock() }; return (cached, onSnapshotUpdated)
+        }()
+        if before != after {
+            callback?()
+        }
     }
 
     func applySnapshot(_ snapshot: [PaseoHostSnapshot]?) {
@@ -257,9 +405,6 @@ struct PaseoAgentSnapshot: Decodable, Sendable {
     }
 
     static func date(_ text: String?) -> Date? {
-        guard let text else { return nil }
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.date(from: text) ?? ISO8601DateFormatter().date(from: text)
+        FastDateParser.parse(text)
     }
 }

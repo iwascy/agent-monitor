@@ -61,6 +61,9 @@ public final class UsageTracker: @unchecked Sendable {
     private var _readCount: Int = 0
     private let lock = NSLock()
 
+    // 预构造字节特征串，避免对非 assistant 行执行完整的 JSON 反序列化
+    private static let assistantMarker = Data("\"assistant\"".utf8)
+
     public init() {}
 
     /// 文件读取次数统计（主要用于测试验证缓存和开关逻辑）
@@ -150,8 +153,29 @@ public final class UsageTracker: @unchecked Sendable {
 
         state.lastModified = mtime
         claudeCache[path] = state
+        pruneClaudeCacheIfNeeded()
 
         return state.buildUsage(updatedAt: mtime)
+    }
+
+    private func pruneClaudeCacheIfNeeded() {
+        guard claudeCache.count > 256 else { return }
+        let sortedKeys = claudeCache.sorted {
+            ($0.value.lastModified ?? .distantPast) < ($1.value.lastModified ?? .distantPast)
+        }.map(\.key)
+        for key in sortedKeys.prefix(claudeCache.count - 128) {
+            claudeCache.removeValue(forKey: key)
+        }
+    }
+
+    private func pruneCodexCacheIfNeeded() {
+        guard codexCache.count > 256 else { return }
+        let sortedKeys = codexCache.sorted {
+            ($0.value.lastModified ?? .distantPast) < ($1.value.lastModified ?? .distantPast)
+        }.map(\.key)
+        for key in sortedKeys.prefix(codexCache.count - 128) {
+            codexCache.removeValue(forKey: key)
+        }
     }
 
     private func processClaudeDataBlock(_ block: Data, state: inout ClaudeState) {
@@ -171,6 +195,7 @@ public final class UsageTracker: @unchecked Sendable {
 
     private func processClaudeLineData(_ lineData: Data, state: inout ClaudeState) {
         guard !lineData.isEmpty,
+              lineData.range(of: Self.assistantMarker) != nil,
               let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
               json["type"] as? String == "assistant" else {
             return
@@ -259,11 +284,12 @@ public final class UsageTracker: @unchecked Sendable {
                 latestModel = model
             }
 
-            guard let data = trimmed.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              json["type"] as? String == "event_msg",
-              let payload = json["payload"] as? [String: Any],
-              payload["type"] as? String == "token_count" else {
+            guard trimmed.contains("\"token_count\""),
+                  let data = trimmed.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  json["type"] as? String == "event_msg",
+                  let payload = json["payload"] as? [String: Any],
+                  payload["type"] as? String == "token_count" else {
                 continue
             }
 
@@ -340,6 +366,7 @@ public final class UsageTracker: @unchecked Sendable {
             state.lastModel = latestModel
         }
         codexCache[path] = state
+        pruneCodexCacheIfNeeded()
 
         return nil
     }

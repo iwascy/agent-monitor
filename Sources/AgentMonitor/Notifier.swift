@@ -159,6 +159,7 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             }
         }
         recentNotifications[key] = (session.state, now)
+        pruneRecentNotifications(now: now)
 
         let parentTitleText = session.parentId.flatMap { parentTitle?($0) }
         let content = UNMutableNotificationContent()
@@ -176,16 +177,7 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             "originator": session.originator ?? ""
         ]
 
-        if let cachedURL = IconManager.shared.cachedIconPNGURL(for: session.kind) {
-            let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("png")
-            do {
-                try FileManager.default.copyItem(at: cachedURL, to: tempURL)
-                let attachment = try UNNotificationAttachment(identifier: "icon-\(session.kind.rawValue)", url: tempURL, options: nil)
-                content.attachments = [attachment]
-            } catch {
-                NSLog("Failed to attach agent icon to notification: %@", error.localizedDescription)
-            }
-        }
+        attachAgentIcon(for: session.kind, to: content)
 
         let identifier = session.state == .waitingForUser
             ? "\(session.id)-waiting"
@@ -244,16 +236,7 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             "originator": session.originator ?? ""
         ]
 
-        if let cachedURL = IconManager.shared.cachedIconPNGURL(for: session.kind) {
-            let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("png")
-            do {
-                try FileManager.default.copyItem(at: cachedURL, to: tempURL)
-                let attachment = try UNNotificationAttachment(identifier: "icon-\(session.kind.rawValue)", url: tempURL, options: nil)
-                content.attachments = [attachment]
-            } catch {
-                NSLog("Failed to attach agent icon to notification: %@", error.localizedDescription)
-            }
-        }
+        attachAgentIcon(for: session.kind, to: content)
 
         let reminderId = "\(session.id)-remind"
         let center = UNUserNotificationCenter.current()
@@ -270,6 +253,30 @@ public final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             if let error = error {
                 NSLog("Failed to deliver reminder notification: %@", error.localizedDescription)
             }
+        }
+    }
+
+    /// 定期回收过期的去重记录，避免长期驻留期间字典无限膨胀。
+    private func pruneRecentNotifications(now: Date) {
+        guard recentNotifications.count > 128 else { return }
+        recentNotifications = recentNotifications.filter { now.timeIntervalSince($0.value.timestamp) < 300.0 }
+    }
+
+    /// 构造通知图标附件并在系统接管后立即清理临时副本，防止临时目录泄漏 PNG 文件。
+    private func attachAgentIcon(for kind: AgentKind, to content: UNMutableNotificationContent) {
+        guard let cachedURL = IconManager.shared.cachedIconPNGURL(for: kind) else { return }
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("png")
+        defer {
+            try? FileManager.default.removeItem(at: tempURL)
+        }
+        do {
+            try FileManager.default.copyItem(at: cachedURL, to: tempURL)
+            let attachment = try UNNotificationAttachment(identifier: "icon-\(kind.rawValue)", url: tempURL, options: nil)
+            content.attachments = [attachment]
+        } catch {
+            NSLog("Failed to attach agent icon to notification: %@", error.localizedDescription)
         }
     }
 
