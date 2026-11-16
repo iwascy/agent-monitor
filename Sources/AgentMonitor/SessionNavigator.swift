@@ -104,6 +104,8 @@ private enum AntigravitySessionNavigator {
         await Task.detached(priority: .userInitiated) {
             let app = AXUIElementCreateApplication(processID)
             AXUIElementSetMessagingTimeout(app, 0.25)
+            // 通知 Electron 宿主显式开启 WebContents 的辅助功能树暴露
+            _ = AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
             // Wait for a newly opened Electron window to publish its AX tree.
             for _ in 0..<8 {
                 if pressConversation(in: app, nativeID: nativeID) { return true }

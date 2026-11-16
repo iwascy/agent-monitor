@@ -102,6 +102,17 @@ struct SessionNavigationTests {
         #expect(expr?.contains("\"/c/\(uuid)\"") == true)
         #expect(expr?.contains("window.history.pushState") == true)
         #expect(AntigravityConnection.clientNavigationExpression(target: URL(string: "https://127.0.0.1:57445/history")!) == nil)
+
+        // Built-in browser WebContentsView tabs report type="page" with localhost dev server URLs.
+        // They must not be confused with the real Antigravity Hub window.
+        let devTab1 = AntigravityConnection.Page(id: "dev1", type: "page", title: "SortFlow v2.0 | AI File Manager", url: "http://localhost:5174/")
+        let devTab2 = AntigravityConnection.Page(id: "dev2", type: "page", title: "SortFlow v2.0 | AI File Manager", url: "http://localhost:5173/")
+        let hubPage = AntigravityConnection.Page(id: "hub", type: "page", title: "Session Title - project - Antigravity", url: "https://127.0.0.1:63873/c/\(other)?project=proj-1")
+        #expect(AntigravityConnection.selectHubCandidates(from: [devTab1, devTab2, hubPage], activeHubPorts: [63873, 63874]) == [hubPage])
+        #expect(AntigravityConnection.selectHubCandidates(from: [devTab1, devTab2, hubPage], activeHubPorts: []) == [hubPage])
+
+        let homeHubPage = AntigravityConnection.Page(id: "hub-home", type: "page", title: "Antigravity", url: "https://127.0.0.1:63873/")
+        #expect(AntigravityConnection.selectHubCandidates(from: [devTab1, homeHubPage], activeHubPorts: []) == [homeHubPage])
     }
 
     @Test("Warp environment parsing extracts UUID, focus URL, and legacy ID")
