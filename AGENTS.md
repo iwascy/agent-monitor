@@ -1,11 +1,12 @@
 # AGENTS.md
 
-macOS 菜单栏 app（SwiftUI `MenuBarExtra`，macOS 26），汇总 Claude Code / Codex / dsh / Antigravity 的会话状态。架构和状态判定细节见 `docs/HANDOFF.md`，各 agent 数据格式见 `docs/FORMATS.md`。
+macOS 菜单栏 app（SwiftUI `MenuBarExtra`，macOS 26），汇总 Claude Code / Codex / dsh / Antigravity / Paseo（本地与远程）的会话状态，并支持子代理嵌套展示。架构和状态判定细节见 `docs/HANDOFF.md`，各 agent 数据格式见 `docs/FORMATS.md`。
 
 ## 构建与测试
 
 - `swift test`：单元测试
-- `./scripts/build-app.sh`：打包到 `build/AgentMonitor.app`，UI 验证前先跑
+- `./scripts/build-app.sh`：Release 编译打包到 `build/AgentMonitor.app`；若 `/Applications/AgentMonitor.app` 已存在且可写，脚本会自动覆盖安装并刷新 LaunchServices（UI 验证前先跑）
+- 覆盖安装后重启菜单栏应用：`pkill -x AgentMonitor 2>/dev/null || true; sleep 1; open /Applications/AgentMonitor.app`
 - `swift run probe`：只读扫描本机真实 agent 数据
 
 ## UI 验证：优先读组件树，不要靠截图和坐标
@@ -31,4 +32,7 @@ swift scripts/panel-probe.swift --mock large --idle-expanded --shots <dir> 全�
 ## 已知坑
 
 - `MenuBarExtra` 的窗口在内容变矮时会停在中间高度。`MenuView` 根视图必须保留 `.fixedSize(horizontal: false, vertical: true)`，否则切换筛选后列表上下出现空白。改面板布局后用 `panel-probe` 切几次筛选，确认窗口高度和直接以该筛选启动时一致。
+- `MenuBarExtra` 面板关闭后只是隐藏，SwiftUI 视图树仍然存活。任何 `TimelineView` / 状态脉冲动画或高频 UI 刷新都**必须绑定面板可见状态**，否则隐藏状态下会持续 30fps 空转吃掉 15–20% CPU（见 `PulsingDotView`）。
+- Antigravity 计时基准：`AntigravityAdapter` 的 `stateSince` 必须取 `conversation_summaries.db` 的 `last_user_input_time`（本轮真实启动时间），不能取 `last_modified_time`（每步 tool call 都会覆盖刷新）。
+- Warp 终端原会话跳转：Warp 注入的环境变量是 `WARP_TERMINAL_SESSION_UUID` 与 `WARP_FOCUS_URL`（原生支持 `warp://session/<uuid>` 协议直达），不要假设 `WARP_SESSION_ID` 或调用 `--warpctrl`。
 - 没装完整 Xcode 时 `@State` 宏不可用，视图状态用 `@LocalState`（`Sources/AgentMonitor/Panel/LocalState.swift`）。
