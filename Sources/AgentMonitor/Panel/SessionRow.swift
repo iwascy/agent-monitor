@@ -42,8 +42,10 @@ struct SessionRow: View {
                         let sub = isOrphanSubagent
                             ? (cwdPart.isEmpty ? "\(session.kind.displayName) · 子代理" : "\(session.kind.displayName) · 子代理 · \(cwdPart)")
                             : (cwdPart.isEmpty ? session.kind.displayName : "\(session.kind.displayName) · \(cwdPart)")
+                        let originSubtitle = session.paseo.map { $0.displayLabel + (cwdPart.isEmpty ? "" : " · \(cwdPart)") }
+                            ?? session.t3Code.map { $0.displayLabel + (cwdPart.isEmpty ? "" : " · \(cwdPart)") }
                         HStack(spacing: 4) {
-                            Text(session.paseo.map { $0.displayLabel + (cwdPart.isEmpty ? "" : " · \(cwdPart)") } ?? sub)
+                            Text(originSubtitle ?? sub)
                                 .font(.system(size: 11))
                                 .foregroundColor(.secondary)
                                 .lineLimit(1)

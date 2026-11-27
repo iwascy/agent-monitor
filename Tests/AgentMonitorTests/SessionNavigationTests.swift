@@ -19,6 +19,34 @@ struct SessionNavigationTests {
         #expect(invalid.deepLink == nil)
     }
 
+    @Test("T3 Code routes via t3code://threads/<env>/<thread> and blocks malformed segments")
+    func t3CodeRoute() throws {
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let resolver = SessionNavigationResolver(home: home)
+
+        let origin = T3CodeOrigin(environmentID: "a0b17cf0-b4aa-42bf-bab9-1062d9ae7238", threadID: uuid, provider: "antigravity")
+        #expect(resolver.resolve(.init(kind: .t3Code, sessionID: "t3Code:\(uuid)", t3Code: origin)) ==
+                .deepLink(URL(string: "t3code://threads/a0b17cf0-b4aa-42bf-bab9-1062d9ae7238/\(uuid)")!, bundleID: "com.t3tools.t3code"))
+
+        // 支持 import: 前缀的线程 ID
+        let imported = T3CodeOrigin(environmentID: "env-1", threadID: "import:codex:\(uuid)", provider: "codex")
+        #expect(resolver.resolve(.init(kind: .t3Code, sessionID: "t3Code:import:codex:\(uuid)", t3Code: imported)) ==
+                .deepLink(URL(string: "t3code://threads/env-1/import:codex:\(uuid)")!, bundleID: "com.t3tools.t3code"))
+
+        // 路径穿越与注入参数被拒绝
+        for bad in ["../other", "a/b", "\(uuid)?prompt=hi", "\(uuid)#frag", "has space", ""] {
+            #expect(T3CodeOrigin(environmentID: "env-1", threadID: bad, provider: "codex").deepLink == nil)
+            #expect(SessionNavigationRequest(kind: .t3Code, sessionID: "t3Code:\(bad)").nativeID == nil)
+        }
+
+        // 未携带 T3CodeOrigin 时回退读取 ~/.t3/userdata/environment-id
+        try FileManager.default.createDirectory(at: home.appendingPathComponent(".t3/userdata"), withIntermediateDirectories: true)
+        try "env-from-disk\n".write(to: home.appendingPathComponent(".t3/userdata/environment-id"), atomically: true, encoding: .utf8)
+        #expect(resolver.resolve(.init(kind: .t3Code, sessionID: "t3Code:\(other)")) ==
+                .deepLink(URL(string: "t3code://threads/env-from-disk/\(other)")!, bundleID: "com.t3tools.t3code"))
+    }
+
     @Test("Codex routes to the native chat ID")
     func codexRoute() {
         let resolver = SessionNavigationResolver(home: URL(fileURLWithPath: "/nonexistent"))

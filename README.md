@@ -1,6 +1,6 @@
 # Agent Monitor
 
-macOS 原生菜单栏常驻应用，用于实时汇总并监控本机所有 AI Agent 会话（**Claude Code**、**Codex**、**DeepSeek Harness (dsh)**、**Antigravity**、**Paseo**）的运行状态。
+macOS 原生菜单栏常驻应用，用于实时汇总并监控本机所有 AI Agent 会话（**Claude Code**、**Codex**、**DeepSeek Harness (dsh)**、**Antigravity**、**Paseo**、**T3 Code**）的运行状态。
 
 在多 Agent 并行执行编程任务时，帮助你第一时间获知：
 - **等你回复 (waitingForUser)**：哪些会话正在等待命令执行授权或等待用户输入。
@@ -93,6 +93,7 @@ open build/AgentMonitor.app
 | **Codex** | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`<br>`~/.codex/session_index.jsonl` | 最近 2 天目录 mtime 结合 `pgrep -f codex` | tail 包含未响应的 `exec_approval_request`、`apply_patch_approval_request` 或 `request_user_input` | tail 包含 `task_complete` | tail 包含运行中工具调用或助手流式输出，且 codex 进程活跃 |
 | **dsh** | `~/.dsh/sessions/<slug>/<uuid>/session.v4.jsonl.zstd`<br>`session.lock` | 只读打开 `session.lock` 并进行 `flock(LOCK_EX \| LOCK_NB)` 探测锁占用 | 持有 lock 且末尾 tool 调用为 `ask_user_question`、`ask_question` 或存在未确认工具授权 | lock 释放且末尾事件为 `turn/end`，或最后一次为 assistant 总结回复 | 持有 lock，事件处于 `turn/start` 与工具执行中 |
 | **Antigravity** | `~/.gemini/antigravity/conversation_summaries.db`<br>`presence/<id>.lock`<br>`brain/<id>/.../transcript.jsonl` | 只读 SQLite 查询且 `killed == 0`，配合 `presence/<id>.lock` 文件锁 | `CASCADE_RUN_STATUS_RUNNING` 且 transcript 最新事件中含有 `ask_question` 工具调用参数 | `CASCADE_RUN_STATUS_IDLE` 或 turn 完成 | `CASCADE_RUN_STATUS_RUNNING` 且正在执行工具或规划生成中 |
+| **T3 Code** | `~/.t3/userdata/statev2.sqlite`<br>`server-runtime.json`<br>`environment-id` | 只读 WAL SQLite 查询 v2 投影表，配合 `server-runtime.json` 进程存活检测 | `orchestration_v2_projection_runtime_requests` 存在 `pending`/`waiting` 请求（区分 `user_input` 与授权类请求）或 run 状态为 `waiting` | 最新 run 从活跃转为 `completed`（经 `SessionStore` 晋升为已完成） | 最新 run 状态为 `preparing` / `queued` / `starting` / `running`，且服务进程存活 |
 
 ---
 

@@ -7,10 +7,14 @@ struct SessionNavigationRequest: Sendable {
     var entrypoint: String? = nil
     var cwd: String? = nil
     var paseo: PaseoOrigin? = nil
+    var t3Code: T3CodeOrigin? = nil
 
     var nativeID: String? {
         guard let sessionID, sessionID.hasPrefix("\(kind.rawValue):") else { return nil }
         let value = String(sessionID.dropFirst(kind.rawValue.count + 1))
+        if kind == .t3Code {
+            return T3CodeOrigin.isValidPathSegment(value) ? value : nil
+        }
         // DSH sometimes prefixes its UUID with `session-`.
         let uuid = kind == .dsh && value.hasPrefix("session-") ? String(value.dropFirst(8)) : value
         guard UUID(uuidString: uuid) != nil else { return nil }
@@ -35,10 +39,19 @@ struct SessionNavigationResolver: Sendable {
             guard let link = origin.deepLink else { return .unavailable("Paseo 会话地址无效。") }
             return .deepLink(link, bundleID: "sh.paseo.desktop")
         }
+        if let origin = request.t3Code {
+            guard let link = origin.deepLink else { return .unavailable("T3 Code 会话地址无效。") }
+            return .deepLink(link, bundleID: "com.t3tools.t3code")
+        }
         guard let id = request.nativeID else { return .unavailable("会话 ID 缺失或格式无效。") }
         switch request.kind {
         case .paseo:
             return .unavailable("缺少 Paseo 主机和会话信息。")
+        case .t3Code:
+            guard let link = t3CodeLink(for: id) else {
+                return .unavailable("未找到 T3 Code 环境 ID 或会话地址无效。")
+            }
+            return .deepLink(link, bundleID: "com.t3tools.t3code")
         case .codex:
             return .deepLink(URL(string: "codex://threads/\(id)")!, bundleID: "com.openai.codex")
         case .antigravity:
@@ -61,6 +74,14 @@ struct SessionNavigationResolver: Sendable {
             if let pid = dshProcessID(for: id) { return .terminal(processID: pid) }
             return .unavailable("未找到对应的 Paseo 会话或持有 DSH 会话锁的终端进程。")
         }
+    }
+
+    func t3CodeLink(for threadID: String) -> URL? {
+        let envURL = home.appendingPathComponent(".t3/userdata/environment-id")
+        guard let envID = try? String(contentsOf: envURL, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !envID.isEmpty else { return nil }
+        return T3CodeOrigin.makeDeepLink(environmentID: envID, threadID: threadID)
     }
 
     func claudeDesktopID(for nativeID: String) -> String? {

@@ -218,3 +218,27 @@
 ### 8.4 DeepSeek Harness (dsh)
 - **数据源**：`session.v4.jsonl.zstd` 本地不含 token 字段，不显示用量。
 
+---
+
+## 9. T3 Code
+
+### 9.1 文件路径与结构
+1. **状态数据库**：`~/.t3/userdata/statev2.sqlite`（SQLite WAL 模式）
+   - 采用与 Antigravity 一致的只读打开顺序：优先 `mode=ro`，在无 `-wal` 文件时回退 `mode=ro&immutable=1`（只读快照，不创建任何文件）。
+   - 核心 v2 投影表：
+     - `projection_projects`：项目目录 `workspace_root`。
+     - `orchestration_v2_projection_threads`：线程元数据（`thread_id`、`project_id`、`title`、`default_provider`、`provider_instance_id`、`active_provider_thread_id`、`updated_at`、`archived_at`、`deleted_at`、`payload_json` 中的 `worktreePath`、`lineage.parentThreadId`、`modelSelection.model`）。
+     - `orchestration_v2_projection_runs`：每个线程的运行记录（按 `ordinal` 降序取最新一条，含 `status`、`requested_at`、`completed_at`、`payload_json.startedAt`）。
+     - `orchestration_v2_projection_runtime_requests`：待处理的运行时请求（`status IN ('pending', 'waiting')`，`kind` 区分 `user_input` 与授权类请求）。
+     - `orchestration_v2_projection_provider_threads`：提取 `payload_json.nativeThreadRef.nativeId`（排除 `pending:` 占位符）用于与本机原生会话去重，以及 `payload_json.contextUsage`（`usedTokens`、`maxTokens`、`inputTokens`、`cachedInputTokens`、`outputTokens`、`reasoningOutputTokens`）用于 Token 用量展示。
+     - `orchestration_v2_projection_turn_items` / `orchestration_v2_projection_messages`：仅对窗口内保留线程按需读取，分别提取等待授权/提问文案、运行中工具或命令详情、空闲时最后一条助手回复摘要。
+2. **环境与运行时元数据**：
+   - `~/.t3/userdata/environment-id`：用于构造桌面端精准跳转深链接 `t3code://threads/<environmentID>/<threadID>`（发送至 `com.t3tools.t3code`）。
+   - `~/.t3/userdata/server-runtime.json`：读取 `pid` 并通过 `kill(pid, 0)` 检测 T3 Code 后台服务是否存活；若服务已退出，所有残留的 `running` / `waiting` 状态自动降级为 `idle` 并设置 `suppressCompletion = true`。
+
+### 9.2 导入线程过滤与去重规则
+- 排除 `deleted_at` 或 `archived_at` 非空的线程。
+- 对于 `thread_id` 以 `import:` 开头的历史导入线程，仅当 `orchestration_v2_projection_runs` 中存在实际运行记录（即在 T3 Code 中续跑过）时才纳入监控，避免批量导入外部历史会话刷屏。
+- 当 T3 Code 驱动的本地会话暴露 `nativeThreadRef.nativeId` 且匹配原生 Codex / Claude Code / Antigravity / DSH 会话时，`T3CodeAdapter.merging` 保留 T3 Code 卡片、隐藏重复原生条目、继承缺失的用量与日志路径，并将原生子代理的父引用重定向至 T3 Code 线程。
+
+

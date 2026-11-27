@@ -80,14 +80,18 @@ final class SessionNavigator {
         if let url = ws.urlForApplication(withBundleIdentifier: bundleID) { return url }
         // Older Codex distributions still use the ChatGPT bundle ID.
         if kind == .codex, let url = ws.urlForApplication(withBundleIdentifier: "com.openai.chat") { return url }
-        let path: String
+        let paths: [String]
         switch kind {
-        case .claudeCode: path = "/Applications/Claude.app"
-        case .codex: path = "/Applications/ChatGPT.app"
-        case .antigravity: path = "/Applications/Antigravity.app"
-        case .dsh, .paseo: path = "/Applications/Paseo.app"
+        case .claudeCode: paths = ["/Applications/Claude.app"]
+        case .codex: paths = ["/Applications/ChatGPT.app"]
+        case .antigravity: paths = ["/Applications/Antigravity.app"]
+        case .dsh, .paseo: paths = ["/Applications/Paseo.app"]
+        case .t3Code: paths = ["/Applications/T3 Code (Beta).app", "/Applications/T3 Code.app"]
         }
-        return FileManager.default.fileExists(atPath: path) ? URL(fileURLWithPath: path) : nil
+        for path in paths where FileManager.default.fileExists(atPath: path) {
+            return URL(fileURLWithPath: path)
+        }
+        return nil
     }
 
     private func activate(kind: AgentKind) async throws -> NSRunningApplication {

@@ -107,6 +107,8 @@ public final class SessionJumper {
             }
         case .paseo:
             return .app(bundleId: "sh.paseo.desktop")
+        case .t3Code:
+            return .app(bundleId: "com.t3tools.t3code")
         case .dsh:
             return .app(bundleId: Self.firstRunningTerminalBundleId())
         case .antigravity:
@@ -116,8 +118,9 @@ public final class SessionJumper {
 
     public func jump(to session: AgentSession, onSuccess: (@MainActor () -> Void)? = nil) {
         let request = SessionNavigationRequest(kind: session.kind, sessionID: session.id,
-                                               entrypoint: session.entrypoint, cwd: session.cwd, paseo: session.paseo)
-        if session.paseo != nil {
+                                               entrypoint: session.entrypoint, cwd: session.cwd,
+                                               paseo: session.paseo, t3Code: session.t3Code)
+        if session.paseo != nil || session.t3Code != nil || session.kind == .t3Code {
             SessionNavigator.shared.open(request, onSuccess: onSuccess)
             return
         }
@@ -170,6 +173,7 @@ public final class SessionJumper {
 
     nonisolated private static func computeDescribeTarget(for session: AgentSession) -> String? {
         if let origin = session.paseo { return "Paseo · \(origin.locationLabel)" }
+        if let origin = session.t3Code { return origin.displayLabel }
         let tgt = resolveTarget(for: session)
         switch tgt {
         case .terminal(let host, let windowHint):
@@ -208,6 +212,7 @@ public final class SessionJumper {
             case .dsh: return "DeepSeek Harness"
             case .antigravity: return "Antigravity"
             case .paseo: return "Paseo"
+            case .t3Code: return "T3 Code"
             }
         }
     }

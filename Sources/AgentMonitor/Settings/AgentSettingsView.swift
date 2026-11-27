@@ -20,6 +20,9 @@ struct AgentSettingsView: View {
         switch kind {
         case .paseo:
             return fm.fileExists(atPath: home.appendingPathComponent(".paseo").path)
+        case .t3Code:
+            return fm.fileExists(atPath: home.appendingPathComponent(".t3/userdata/statev2.sqlite").path)
+                || fm.fileExists(atPath: home.appendingPathComponent(".t3").path)
         case .claudeCode:
             return fm.fileExists(atPath: home.appendingPathComponent(".claude").path)
         case .codex:
@@ -53,6 +56,7 @@ struct AgentSettingsView: View {
 
         switch kind {
         case .paseo: return "~/.paseo"
+        case .t3Code: return "~/.t3/userdata"
         case .claudeCode: return "~/.claude"
         case .codex: return "~/.codex"
         case .dsh: return "~/.dsh"

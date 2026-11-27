@@ -59,7 +59,8 @@ func formatUsageLine(_ u: SessionUsage) -> String {
 let paseo = PaseoAdapter()
 // Explicit, synchronous read for this diagnostic tool; the menu bar uses cached background reads.
 paseo.refreshNow()
-let adapters: [AgentAdapter] = [claude, codex, dsh, antigravity, paseo]
+let t3Code = T3CodeAdapter(maxAgeSeconds: maxAge)
+let adapters: [AgentAdapter] = [claude, codex, dsh, antigravity, paseo, t3Code]
 
 for adapter in adapters {
     print("----------------------------------------")
@@ -76,6 +77,9 @@ for adapter in adapters {
             }
             if let origin = s.paseo {
                 print("      Paseo: \(origin.locationLabel) / \(origin.provider) / \(origin.connected ? "connected" : "offline")")
+            }
+            if let origin = s.t3Code {
+                print("      T3 Code: \(origin.providerDisplayName) / thread=\(origin.threadID)" + (origin.nativeSessionID.map { " / native=\($0)" } ?? ""))
             }
             print("      CWD: \(s.cwd ?? "<none>")")
             print("      State (raw): \(s.state.rawValue)")

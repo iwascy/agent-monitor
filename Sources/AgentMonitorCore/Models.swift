@@ -13,6 +13,7 @@ public enum AgentKind: String, Codable, Sendable, CaseIterable {
     case dsh = "dsh"
     case antigravity = "antigravity"
     case paseo = "paseo"
+    case t3Code = "t3Code"
 
     public var displayName: String {
         switch self {
@@ -21,6 +22,7 @@ public enum AgentKind: String, Codable, Sendable, CaseIterable {
         case .dsh: return "DeepSeek Harness"
         case .antigravity: return "Antigravity"
         case .paseo: return "Paseo"
+        case .t3Code: return "T3 Code"
         }
     }
 
@@ -31,6 +33,7 @@ public enum AgentKind: String, Codable, Sendable, CaseIterable {
         case .dsh: return "DS"
         case .antigravity: return "AG"
         case .paseo: return "PS"
+        case .t3Code: return "T3"
         }
     }
 
@@ -41,6 +44,7 @@ public enum AgentKind: String, Codable, Sendable, CaseIterable {
         case .dsh: return "com.deepseek.dsh"
         case .antigravity: return "com.google.antigravity"
         case .paseo: return "sh.paseo.desktop"
+        case .t3Code: return "com.t3tools.t3code"
         }
     }
 }
@@ -67,6 +71,7 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
     public var parentId: String?        // 父会话的完整 id，即 "dsh:<parentSession>"；主会话为 nil
     public var subagentDepth: Int       // 0 = 主会话
     public var paseo: PaseoOrigin?
+    public var t3Code: T3CodeOrigin?
     public var subagents: [AgentSession] // 仅用于显示的嵌套结果，SessionStore 内部始终为空
 
     public init(
@@ -91,9 +96,11 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
         parentId: String? = nil,
         subagentDepth: Int = 0,
         subagents: [AgentSession] = [],
-        paseo: PaseoOrigin? = nil
+        paseo: PaseoOrigin? = nil,
+        t3Code: T3CodeOrigin? = nil
     ) {
         self.paseo = paseo
+        self.t3Code = t3Code
         self.id = id
         self.kind = kind
         self.title = title

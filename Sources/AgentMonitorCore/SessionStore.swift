@@ -63,6 +63,7 @@ public final class SessionStore: @unchecked Sendable {
                 if let c = adapter as? ClaudeCodeAdapter { c.showUsage = newValue }
                 if let c = adapter as? CodexAdapter { c.showUsage = newValue }
                 if let a = adapter as? AntigravityAdapter { a.showUsage = newValue }
+                if let t = adapter as? T3CodeAdapter { t.showUsage = newValue }
             }
             lock.unlock()
         }
@@ -462,7 +463,9 @@ public final class SessionStore: @unchecked Sendable {
             }
         }
 
-        scannedSessions = Dictionary(uniqueKeysWithValues: PaseoAdapter.merging(Array(scannedSessions.values)).map { ($0.id, $0) })
+        let mergedPaseo = PaseoAdapter.merging(Array(scannedSessions.values))
+        let mergedAll = T3CodeAdapter.merging(mergedPaseo)
+        scannedSessions = Dictionary(uniqueKeysWithValues: mergedAll.map { ($0.id, $0) })
 
         var transitions: [SessionTransition] = []
         var hasContentChanges = false

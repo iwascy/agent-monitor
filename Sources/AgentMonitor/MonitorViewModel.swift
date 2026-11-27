@@ -320,6 +320,9 @@ public final class MonitorViewModel: ObservableObject {
             } else if mock.lowercased() == "paseo" {
                 self.rawSessions = MonitorViewModel.mockPaseoSessions()
                 self.isIdleExpanded = true
+            } else if mock.lowercased() == "t3code" {
+                self.rawSessions = MonitorViewModel.mockT3CodeSessions()
+                self.isIdleExpanded = true
             } else if mock.lowercased() == "empty" {
                 self.rawSessions = []
             } else if mock.lowercased() == "subagents" {
@@ -812,6 +815,28 @@ public final class MonitorViewModel: ObservableObject {
                          detail: "连接断开 · 状态待同步", suppressCompletion: true,
                          paseo: PaseoOrigin(serverID: "offline", agentID: "bf7c14ea-f041-4ac1-98a0-0e90d03e0af6",
                                              hostName: "备用服务器", isLocal: false, provider: "dsh-pi", connected: false))
+        ]
+    }
+
+    static func mockT3CodeSessions() -> [AgentSession] {
+        let now = Date()
+        return [
+            AgentSession(id: "t3Code:ebc9d62b-4cf4-4b4a-b5e5-b975f5175afb", kind: .t3Code,
+                         title: "添加 T3Code 支持", cwd: "/Users/cyan/code/agent-monitor", state: .running,
+                         stateSince: now.addingTimeInterval(-95), lastActivity: now,
+                         detail: "正在运行 swift test",
+                         usage: SessionUsage(model: "gemini-4-neon", contextTokens: 173_555, contextWindow: 1_048_576, updatedAt: now),
+                         t3Code: T3CodeOrigin(environmentID: "env-local", threadID: "ebc9d62b-4cf4-4b4a-b5e5-b975f5175afb", provider: "antigravity")),
+            AgentSession(id: "t3Code:61d91995-549c-49a8-be5d-94d6ba7f3451", kind: .t3Code,
+                         title: "部署配置变更审批", cwd: "/Users/cyan/code/collect-server", state: .waitingForUser,
+                         stateSince: now.addingTimeInterval(-120), lastActivity: now,
+                         detail: "git push origin main", detailIsCommand: true, waitingLabel: "等待授权",
+                         t3Code: T3CodeOrigin(environmentID: "env-local", threadID: "61d91995-549c-49a8-be5d-94d6ba7f3451", provider: "codex")),
+            AgentSession(id: "t3Code:9b41a642-7f5e-4e92-8e7b-39e238f3d9a1", kind: .t3Code,
+                         title: "重构 SQLite 只读适配", cwd: "/Users/cyan/code/agent-monitor", state: .completed,
+                         stateSince: now.addingTimeInterval(-300), lastActivity: now.addingTimeInterval(-300),
+                         detail: "已完成所有单元测试并通过验证", completedDuration: 185,
+                         t3Code: T3CodeOrigin(environmentID: "env-local", threadID: "9b41a642-7f5e-4e92-8e7b-39e238f3d9a1", provider: "claudeAgent"))
         ]
     }
 
